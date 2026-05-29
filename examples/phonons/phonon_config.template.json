@@ -1,0 +1,19 @@
+{
+  "_comment": "COPY THIS FILE to phonon_config.json and fill in your local paths.",
+  "tools": {
+    "lammps_bin": "/path/to/lammps/src/lmp_serial",
+    "dftb_bin": "/path/to/dftb+/dftb+",
+    "slakos_dir": "/path/to/slakos",
+    "phonopy_bin": "phonopy",
+    "alamode_displace": "displace.py",
+    "alamode_extract": "extract.py",
+    "alamode_alm": "alm",
+    "alamode_anphon": "anphon",
+    "phonondb_dir": "/path/to/phononDB_repo"
+  },
+  "potentials": {
+    "si_sw": "/path/to/lammps/potentials/Si.sw",
+    "si_tersoff": "/path/to/lammps/potentials/SiCGe.tersoff",
+    "c_tersoff": "/path/to/lammps/potentials/SiC.tersoff"
+  }
+}
