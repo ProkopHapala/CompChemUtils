@@ -39,7 +39,11 @@ DEFAULT_LABEL_POS = {
 
 
 def read_phonopy_band_yaml(path: str):
-    """Read phonopy band.yaml and return distances, frequencies, labels."""
+    """Read phonopy band.yaml and return distances, frequencies, labels.
+
+    Handles phonopy v4 format where labels are in top-level 'labels' list
+    paired with 'segment_nqpoint'.
+    """
     try:
         import yaml
     except ImportError:
@@ -51,37 +55,42 @@ def read_phonopy_band_yaml(path: str):
 
     nq = data["nqpoint"]
     segments = data.get("segment_nqpoint", [nq])
+    phonon = data["phonon"]
 
     all_dist = []
     all_freqs = []
-    all_labels = []
-
-    phonon = data["phonon"]
-    idx = 0
-    for seg_nq in segments:
-        seg_phonon = phonon[idx:idx + seg_nq]
-        idx += seg_nq
-
-        for q in seg_phonon:
-            all_dist.append(q["distance"])
-            bands = q["band"]
-            freqs = [b["frequency"] for b in bands]
-            all_freqs.append(freqs)
-
-            label = q.get("label", "")
-            if label:
-                all_labels.append((q["distance"], label))
+    for q in phonon:
+        all_dist.append(q["distance"])
+        bands = q["band"]
+        freqs = [b["frequency"] for b in bands]
+        all_freqs.append(freqs)
 
     all_dist = np.array(all_dist)
     all_freqs = np.array(all_freqs)
 
-    # Deduplicate labels
+    # Extract labels from top-level labels + segment_nqpoint
+    all_labels = []
+    top_labels = data.get("labels", [])
+    if top_labels and segments:
+        idx = 0
+        for seg_i, seg_nq in enumerate(segments):
+            if seg_i < len(top_labels):
+                start_lab, end_lab = top_labels[seg_i]
+                # Start label at first q-point of segment
+                all_labels.append((all_dist[idx], start_lab))
+                # End label at last q-point of segment
+                end_idx = idx + seg_nq - 1
+                if end_idx < len(all_dist):
+                    all_labels.append((all_dist[end_idx], end_lab))
+            idx += seg_nq
+
+    # Deduplicate labels (keep first occurrence)
     labels = []
     seen = set()
     for d, lab in all_labels:
-        key = (round(d, 6), lab)
+        key = (round(float(d), 6), str(lab))
         if key not in seen:
-            labels.append((d, lab))
+            labels.append((float(d), str(lab)))
             seen.add(key)
 
     return all_dist, all_freqs, labels
@@ -124,8 +133,11 @@ def read_mp_phonon_json(path: str):
 def normalize_labels(labels):
     out = []
     for d, lab in labels:
-        lab = str(lab).replace("\\Gamma", "Γ").replace("Gamma", "Γ")
-        lab = "Γ" if lab in ("G", "GAMMA") else lab
+        lab = str(lab)
+        # Strip phonopy LaTeX math mode wrappers
+        lab = lab.replace("$\\mathrm{", "").replace("$", "").replace("\\mathrm{", "").replace("}", "")
+        lab = lab.replace("\\Gamma", "Γ").replace("Gamma", "Γ")
+        lab = "Γ" if lab in ("G", "GAMMA", "\\Gamma") else lab
         out.append((float(d), lab))
     return out
 
@@ -153,9 +165,12 @@ def match_exp_to_labels(exp_data, theory_labels):
     matched = []
     for pt in exp_data.get("points", []):
         lab = pt.get("label", "")
-        if lab in label_pos:
+        # Normalize experimental label for matching
+        lab_norm = lab.replace("\\Gamma", "Γ").replace("Gamma", "Γ")
+        lab_norm = "Γ" if lab_norm in ("G", "GAMMA", "\\Gamma") else lab_norm
+        if lab_norm in label_pos:
             pt_copy = dict(pt)
-            pt_copy["q"] = label_pos[lab]
+            pt_copy["q"] = label_pos[lab_norm]
             matched.append(pt_copy)
         elif pt.get("q") is not None:
             matched.append(pt)

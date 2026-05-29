@@ -15,13 +15,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from vib_utils import freq_npy_path, filter_real_freqs
 
-COLORS = ['tab:blue', 'tab:red', 'tab:green', 'tab:orange', 'tab:purple', 'tab:brown']
-
-# Method tags that may exist per molecule (in preferred display order)
-METHOD_TAGS = {
-    'adamantane':      ['dftb_mio-1-1', 'dftb_3ob-3-1', 'cp2k_pbe_szv_molopt_sr_gth', 'gpaw_lcao_dzp_pbe', 'psi4_b3lyp_cc-pvdz', 'pyscf_hf_sto-3g', 'pyscf_b3lyp_sto-3g'],
-    'sila_adamantane': ['dftb_matsci-0-3', 'dftb_pbc-0-3', 'cp2k_pbe_szv_molopt_sr_gth', 'gpaw_lcao_dzp_pbe', 'psi4_b3lyp_cc-pvdz', 'pyscf_hf_sto-3g', 'pyscf_b3lyp_sto-3g'],
-}
+COLORS = ['tab:blue', 'tab:red', 'tab:green', 'tab:orange', 'tab:purple', 'tab:brown', 'tab:pink', 'tab:olive']
 
 METHOD_LABELS = {
     'dftb_mio-1-1':              'DFTB+ mio-1-1',
@@ -33,6 +27,8 @@ METHOD_LABELS = {
     'psi4_b3lyp_cc-pvdz':        'Psi4 B3LYP/cc-pVDZ',
     'pyscf_hf_sto-3g':           'HF / STO-3G',
     'pyscf_b3lyp_sto-3g':        'B3LYP / STO-3G',
+    'pyscf_b3lyp_ccpVDZ':        'PySCF B3LYP/cc-pVDZ',
+    'pyscf_b3lyp_cc-pvdz':       'PySCF B3LYP/cc-pVDZ',
 }
 
 
@@ -45,15 +41,21 @@ def broaden(freqs, x, width):
 
 
 def load_all(mol_name, workdir='.'):
-    """Load all available frequency arrays for this molecule. Returns dict {tag: freqs}."""
+    """Auto-discover all cached frequency files for this molecule. Returns dict {tag: freqs}."""
     data = {}
-    for tag in METHOD_TAGS.get(mol_name, []):
-        p = freq_npy_path(mol_name, tag, workdir)
-        if p.exists():
+    wd = Path(workdir)
+    pattern = f'{mol_name}_*_freq.npy'
+    for p in sorted(wd.glob(pattern)):
+        # Extract method tag from filename: <mol>_<tag>_freq.npy
+        stem = p.stem  # e.g. CH4_pyscf_b3lyp_ccpVDZ_freq
+        parts = stem.split('_')
+        # tag = everything between mol_name and 'freq'
+        if len(parts) >= 3 and parts[-1] == 'freq':
+            tag = '_'.join(parts[1:-1])
             data[tag] = np.load(str(p))
             print(f"  Loaded {tag}: {len(data[tag])} modes from {p}")
-        else:
-            print(f"  Missing: {p}")
+    if not data:
+        print(f"  No cached files found matching {wd}/{pattern}")
     return data
 
 
@@ -100,7 +102,7 @@ def plot_overlay(mol_name, data, xmax=3500, width=20, workdir='.', noshow=False)
 
 def main():
     parser = argparse.ArgumentParser(description='Plot vibrational spectra overlay (multiple methods, one molecule)')
-    parser.add_argument('molecule', choices=list(METHOD_TAGS.keys()))
+    parser.add_argument('molecule', help='Molecule name (e.g. CH4, SiH4, adamantane)')
     parser.add_argument('--workdir', default='.', help='Directory with cached frequency files')
     parser.add_argument('--xmax',   type=float, default=3500, help='Max frequency axis (cm^-1)')
     parser.add_argument('--width',  type=float, default=20,   help='Gaussian broadening width (cm^-1)')

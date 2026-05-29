@@ -183,3 +183,177 @@ cross-section data, though phonon dispersions are primarily in the literature).
   - MANYBODY package for Stillinger-Weber and Tersoff potentials
   - MEAM package for MEAM potentials
   - Rebuild LAMMPS with appropriate packages if needed
+
+---
+
+# Molecular Vibrational Spectra (tSiNCs)
+
+A consolidated caching and computation pipeline for molecular vibrational spectra using PySCF (analytical Hessian) and DFTB+ (finite-difference Hessian via ASE). Designed to avoid scattered JSON cache files and produce clean, reusable outputs.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `../tSiNCs/vib_utils.py` | Core library: calculators, optimization, Hessian extraction, mode export |
+| `../tSiNCs/run_vib_spectra.py` | Main runner: selects molecule & methods, orchestrates caching, exports modes, generates overlay plots |
+| `../tSiNCs/plot_vib_spectra.py` | Standalone overlay plotter (auto-discovers cached `.npy` files) |
+
+## Supported Methods
+
+| Method | Calculator | Hessian source | Cost |
+|--------|-----------|----------------|------|
+| `pyscf_b3lyp` | PySCF B3LYP/cc-pVDZ | Analytical (exact) | High (O(N⁴) per gradient) |
+| `dftb_mio` | DFTB+ `mio-1-1` SK | ASE finite-difference | Very low |
+| `dftb_3ob` | DFTB+ `3ob-3-1` SK | ASE finite-difference | Very low |
+| `dftb_matsci` | DFTB+ `matsci-0-3` SK | ASE finite-difference | Very low |
+| `dftb_pbc` | DFTB+ `pbc-0-3` SK | ASE finite-difference | Very low |
+
+### DFTB+ Slater-Koster sets
+
+The DFTB+ calculator expects SK files under `/home/prokop/SIMULATIONS/dftbplus/slakos/`:
+- `mio-1-1/` — organic molecules (C, H, N, O, S)
+- `3ob-3-1/` — improved organic/organo-metallic parameters
+- `matsci-0-3/` — materials science (Si, C, …)
+- `pbc-0-3/` — periodic/bulk parameters
+
+If your SK directory differs, edit `SK_PATHS` in `vib_utils.py`.
+
+## How It Works
+
+### 1. Consolidated caching (no scattered JSON)
+
+ASE's `Vibrations` class normally writes hundreds of small `cache.*.json` files to disk. Our pipeline:
+1. Redirects ASE displacement data to a **temporary directory** (`/tmp/asevib_*`)
+2. Extracts the Hessian matrix (`vib.H`) and frequencies immediately after the run
+3. Saves them as single binary `.npy` files
+4. **Deletes the temp directory** — no scattered files remain
+
+On cache reload, modes are reconstructed directly from the saved Hessian using mass-weighted diagonalization (`_modes_from_hessian_ase`), eliminating any dependency on ASE's JSON cache.
+
+### 2. PySCF analytical Hessian
+
+PySCF does not need finite differences. The pipeline:
+1. Optimizes geometry via ASE BFGS (using a thin `PySCFCalc` wrapper that calls PySCF gradients)
+2. Builds a fresh PySCF `mol`/`mf` at the optimized geometry
+3. Computes `mf.Hessian().kernel()` — fully analytical
+4. Extracts frequencies and normal modes via `pyscf.hessian.thermo.harmonic_analysis`
+
+### 3. Output formats
+
+For every `(molecule, method)` combination, the pipeline produces:
+
+| File | Format | Contents |
+|------|--------|----------|
+| `<mol>_<method>_relaxed.xyz` | XYZ | Optimized geometry |
+| `<mol>_<method>_hessian.npy` | NumPy binary | `(3N, 3N)` Hessian matrix |
+| `<mol>_<method>_freq.npy` | NumPy binary | Complex frequency array `(3N,)` in cm⁻¹ |
+| `<mol>_<method>_modes.txt` | ASCII | Human-readable mode table (freq + displacement vectors) |
+| `<mol>_<method>_all_modes.xyz` | Multi-frame XYZ | All real modes as displaced geometries (view in Jmol/VMD) |
+| `<mol>_vib_overlay.png` | PNG | Stick + Gaussian-broadened overlay spectra |
+
+## Usage
+
+### Compute vibrational spectra
+
+```bash
+cd ../tSiNCs
+
+# Small molecules (fast — includes PySCF)
+python run_vib_spectra.py CH4 --workdir results --plot
+python run_vib_spectra.py SiH4 --workdir results --plot
+
+# Larger molecules (DFTB+ only by default; add --methods for PySCF)
+python run_vib_spectra.py adamantane --workdir results --plot
+python run_vib_spectra.py Si10_H --workdir results --plot
+
+# Force PySCF on larger molecules (long — ~30–60 min each)
+python run_vib_spectra.py adamantane --methods pyscf_b3lyp --workdir results --plot
+```
+
+The `--workdir` flag controls where all cached `.npy`/`.xyz`/`.txt`/`.png` files are written.
+
+### Plot cached results
+
+`plot_vib_spectra.py` auto-discovers cached `.npy` files — no hardcoded method lists:
+
+```bash
+python plot_vib_spectra.py CH4 --workdir results --xmax 3500
+python plot_vib_spectra.py adamantane --workdir results --xmax 3200
+python plot_vib_spectra.py Si10_H --workdir results --xmax 2200 --noshow
+```
+
+### Load cached data programmatically
+
+```python
+import numpy as np
+
+freqs = np.load('results/CH4_pyscf_b3lyp_cc-pVDZ_freq.npy')
+hess  = np.load('results/CH4_pyscf_b3lyp_cc-pVDZ_hessian.npy')
+# freqs is complex: imag part → imaginary modes (rotation/translation)
+real_freqs = freqs[freqs.imag == 0].real
+```
+
+## Known Issues & Fixes
+
+### DFTB+ `results.tag` parsing bug
+
+ASE's DFTB calculator fails when parsing `results.tag` eigenvalue blocks with wrapped lines. Fixed by monkey-patching `calc.read_eigenvalues = lambda: None` in `make_dftb_calc` — eigenvalues are not needed for force/energy calculations.
+
+### Missing `ase.calculators.pyscf`
+
+ASE does not ship a PySCF calculator. We provide a minimal `PySCFCalc` class in `vib_utils.py` that wraps `pyscf.grad.rks.Gradients` (or `rhf.Gradients` for HF) and returns forces as `-gradient`.
+
+### mol2 format
+
+ASE cannot read `.mol2` natively. `run_vib_spectra.py` includes a `read_mol2()` helper that uses OpenBabel to convert to XYZ before loading.
+
+## Results
+
+### CH₄ (5 atoms)
+
+| Method | Modes | Frequencies (cm⁻¹) |
+|--------|-------|-------------------|
+| **PySCF B3LYP/cc-pVDZ** | 9 | 1309 (×3), 1531 (×2), 3030, 3152 (×3) |
+| **DFTB+ mio-1-1** | 9 | 1323 (×3), 1503 (×2), 2956, 3157 (×3) |
+| **DFTB+ 3ob-3-1** | 9 | 1296 (×3), 1475 (×2), 2860, 3050 (×3) |
+
+PySCF and mio-1-1 agree within ~5 % on stretch frequencies; 3ob-3-1 underestimates C–H stretches by ~3–4 %.
+
+### SiH₄ (5 atoms)
+
+| Method | Modes | Frequencies (cm⁻¹) |
+|--------|-------|-------------------|
+| **PySCF B3LYP/cc-pVDZ** | 9 | 908 (×3), 971 (×2), 2205, 2217 (×3) |
+| **DFTB+ matsci-0-3** | 9 | 775 (×3), 881 (×2), 2205, 2210 (×3) |
+| **DFTB+ pbc-0-3** | 9 | 740 (×3), 878 (×2), 2162, 2171 (×3) |
+
+DFTB+ Si–H stretches are within ~1–2 % of PySCF, but bending modes are underestimated by ~15–20 %.
+
+### Adamantane C₁₀H₁₆ (26 atoms)
+
+| Method | Modes | Low (cm⁻¹) | Mid (cm⁻¹) | C–H stretch (cm⁻¹) |
+|--------|-------|-----------|-----------|-------------------|
+| **DFTB+ mio-1-1** | 72 | 314–1455 | 2889–2995 | 2900–3000 |
+| **DFTB+ 3ob-3-1** | 72 | 308–1433 | 2919–3002 | 2920–3002 |
+
+PySCF B3LYP/cc-pVDZ was attempted but killed after ~80 s/gradient — estimated total time ~30–60 min. Rerun with `python run_vib_spectra.py adamantane --methods pyscf_b3lyp` if needed.
+
+### Si₁₀H₁₆ (26 atoms)
+
+| Method | Modes | Low (cm⁻¹) | Si–H stretch (cm⁻¹) |
+|--------|-------|-----------|-------------------|
+| **DFTB+ matsci-0-3** | 72 | 86–1449 | 2051–2088 |
+| **DFTB+ pbc-0-3** | 72 | 77–832 | 1995–2050 |
+
+Both SK sets agree within ~2 % on Si–H stretches; pbc-0-3 produces slightly softer low-frequency modes.
+
+## Performance Notes
+
+| Molecule | N_atoms | PySCF B3LYP/cc-pVDZ (grad) | DFTB+ (full vib) |
+|----------|---------|---------------------------|-----------------|
+| CH₄ | 5 | ~3 s | ~10 s |
+| SiH₄ | 5 | ~4 s | ~10 s |
+| Adamantane | 26 | ~98 s | ~2 min |
+| Si₁₀H₁₆ | 26 | not timed (killed) | ~2 min |
+
+PySCF scales steeply with system size; for >15 atoms consider running overnight or using a cheaper basis (e.g., `sto-3g` for quick tests). DFTB+ remains fast enough for interactive use up to ~50 atoms.

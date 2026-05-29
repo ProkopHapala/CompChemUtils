@@ -65,6 +65,12 @@ POTENTIALS = {
     }
 }
 
+# MEAM library element names in LAMMPS standard library.meam
+MEAM_LIB_NAMES = {
+    "Si": "SiS",
+    "C": None,  # No standard C entry in library.meam
+}
+
 
 def load_config(config_path: str = "phonon_config.json"):
     """Load tool and potential paths from config file."""
@@ -203,8 +209,13 @@ def write_lammps_input(prefix: str, material: str, potential: str, mtp_file: str
             pot_file = pot_paths.get("c_tersoff", "C.tersoff")
             lines.append(f"pair_coeff      * * {pot_file} C")
     elif potential == "meam":
+        lib_name = MEAM_LIB_NAMES.get(elem)
+        if not lib_name:
+            print(f"ERROR: MEAM not configured for element '{elem}' in MEAM_LIB_NAMES")
+            sys.exit(1)
+        meam_lib = pot_paths.get("meam_library", "library.meam")
         lines.append("pair_style      meam")
-        lines.append("pair_coeff      * * library.meam Si_2.meam.spline Si")
+        lines.append("pair_coeff      * * {} {} NULL {}".format(meam_lib, lib_name, lib_name))
     elif potential == "mtp":
         if not mtp_file:
             print("ERROR: --mtp-file required for MTP potential")

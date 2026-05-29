@@ -13,7 +13,8 @@
   },
   "potentials": {
     "si_sw": "/path/to/lammps/potentials/Si.sw",
-    "si_tersoff": "/path/to/lammps/potentials/SiCGe.tersoff",
-    "c_tersoff": "/path/to/lammps/potentials/SiC.tersoff"
+    "si_tersoff": "/path/to/lammps/potentials/Si.tersoff",
+    "c_tersoff": "/path/to/lammps/potentials/SiC.tersoff",
+    "meam_library": "/path/to/lammps/potentials/library.meam"
   }
 }

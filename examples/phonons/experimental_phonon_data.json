@@ -1,0 +1,154 @@
+{
+  "Si": {
+    "source": "Dolling (1963) INS + Nilsson & Nelin (1972) PRB; approximate values",
+    "unit": "THz",
+    "points": [
+      {
+        "label": "G",
+        "branch": "TO/LO",
+        "frequency": 15.53,
+        "error": 0.1,
+        "q": 0.0
+      },
+      {
+        "label": "X",
+        "branch": "TA",
+        "frequency": 3.8,
+        "error": 0.1,
+        "q": 0.0
+      },
+      {
+        "label": "X",
+        "branch": "LA",
+        "frequency": 12.3,
+        "error": 0.1,
+        "q": 0.0
+      },
+      {
+        "label": "X",
+        "branch": "TO",
+        "frequency": 13.9,
+        "error": 0.1,
+        "q": 0.0
+      },
+      {
+        "label": "K",
+        "branch": "TA",
+        "frequency": 3.1,
+        "error": 0.1,
+        "q": 0.0
+      },
+      {
+        "label": "K",
+        "branch": "LA",
+        "frequency": 11.2,
+        "error": 0.1,
+        "q": 0.0
+      },
+      {
+        "label": "K",
+        "branch": "TO",
+        "frequency": 14.5,
+        "error": 0.1,
+        "q": 0.0
+      },
+      {
+        "label": "L",
+        "branch": "TA",
+        "frequency": 3.3,
+        "error": 0.1,
+        "q": 0.0
+      },
+      {
+        "label": "L",
+        "branch": "LA",
+        "frequency": 11.0,
+        "error": 0.1,
+        "q": 0.0
+      },
+      {
+        "label": "L",
+        "branch": "TO",
+        "frequency": 14.7,
+        "error": 0.1,
+        "q": 0.0
+      }
+    ]
+  },
+  "diamond": {
+    "source": "Warren et al. (1967) + Kulda et al.; approximate values",
+    "unit": "THz",
+    "points": [
+      {
+        "label": "G",
+        "branch": "Raman",
+        "frequency": 39.93,
+        "error": 0.1,
+        "q": 0.0
+      },
+      {
+        "label": "X",
+        "branch": "TA",
+        "frequency": 10.8,
+        "error": 0.2,
+        "q": 0.0
+      },
+      {
+        "label": "X",
+        "branch": "LA",
+        "frequency": 24.9,
+        "error": 0.2,
+        "q": 0.0
+      },
+      {
+        "label": "X",
+        "branch": "TO",
+        "frequency": 27.6,
+        "error": 0.2,
+        "q": 0.0
+      },
+      {
+        "label": "K",
+        "branch": "TA",
+        "frequency": 8.7,
+        "error": 0.2,
+        "q": 0.0
+      },
+      {
+        "label": "K",
+        "branch": "LA",
+        "frequency": 22.8,
+        "error": 0.2,
+        "q": 0.0
+      },
+      {
+        "label": "K",
+        "branch": "TO",
+        "frequency": 30.6,
+        "error": 0.2,
+        "q": 0.0
+      },
+      {
+        "label": "L",
+        "branch": "TA",
+        "frequency": 8.7,
+        "error": 0.2,
+        "q": 0.0
+      },
+      {
+        "label": "L",
+        "branch": "LA",
+        "frequency": 22.8,
+        "error": 0.2,
+        "q": 0.0
+      },
+      {
+        "label": "L",
+        "branch": "TO",
+        "frequency": 30.6,
+        "error": 0.2,
+        "q": 0.0
+      }
+    ]
+  }
+}

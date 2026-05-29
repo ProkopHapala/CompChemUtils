@@ -423,4 +423,116 @@ python plot_phonon_benchmark.py \
     --output si_benchmark.png
 ```
 
-If you hit any compilation errors during the ALAMODE or LAMMPS builds, paste the error message and I’ll help debug it.
+If you hit any compilation errors during the ALAMODE or LAMMPS builds, paste the error message and I'll help debug it.
+
+---
+
+## 6. Reference Data Sourcing Report
+
+### 6.1 Silicon DFT Reference
+
+**Source:** phononDB (AFLOW-based DFT phonon database)  
+**Location on disk:** `/home/prokop/SIMULATIONS/phononDB_repo/phonon_db_tarred/`  
+**File used:** `Si_phonondb_band.yaml`
+
+**Procedure:**
+1. Searched the local phononDB repository for Si entries.
+2. Found the band structure YAML for Si (mp-149, diamond structure, space group Fd-3m).
+3. Copied the `band.yaml` to `./phonondb_ref/Si_phonondb_band.yaml`.
+4. Verified the data contains 6 phonon bands across the standard high-symmetry path (L-Γ-X-K-Γ).
+
+**Data format:** phonopy `band.yaml` (v4) with `nqpoint`, `natom`, `phonon` array, and `labels` / `segment_nqpoint` at the top level.
+
+---
+
+### 6.2 Diamond DFT Reference
+
+**Source:** Materials Project (MP) -- phonon dispersion calculated via DFPT (ABINIT, PBEsol, norm-conserving pseudopotentials from Pseudo-dojo v0.3)  
+**Material ID:** `mp-66` (Carbon, diamond structure, Fd-3m)  
+**API key:** Loaded from environment variable `MATERIALSPROJECT_API_KEY` (never hardcoded in scripts)  
+**Method:** `pymatgen.ext.matproj.MPRester.get_phonon_bandstructure_by_material_id('mp-66')`
+
+**Why not phononDB?**  
+The local phononDB repository contains **no diamond entry** for mp-66 or any Fd-3m carbon allotrope. A full catalog search returned only a single unrelated carbon structure (mp-990448, hexagonal P6/mmm). Diamond is surprisingly absent from this snapshot of phononDB.
+
+**Procedure:**
+1. Attempted to query phononDB locally -- no diamond found.
+2. Attempted direct `curl` to Materials Project REST endpoints -- deprecated/returned errors (`403 Forbidden`, `410 Gone`).
+3. Used `pymatgen.ext.matproj.MPRester` (legacy API client, stable for phonon queries) with the API key stored in `$MATERIALSPROJECT_API_KEY`.
+4. Retrieved the `PhononBandStructure` object; extracted:
+   - `qpoints` (fractional coordinates)
+   - `distance` (cumulative path distance)
+   - `bands` (frequencies in THz)
+   - `labels_dict` (high-symmetry point labels)
+5. Wrote to `mp_diamond_phonon_bands.dat` in human-readable columnar format.
+
+**Output file:** `mp_diamond_phonon_bands.dat`  
+**Format:** `# qx qy qz distance mp_DFT_b1 ... mp_DFT_b6 label`  
+**Shape:** 219 q-points x 6 bands  
+**Path labels identified:** `Γ`, `X`, `K`, `Γ`, `L`, `X`, `U|K`, `Γ`
+
+**Key frequencies (THz):**
+| Point | Optical max | Acoustic (LA/TA) |
+|-------|-------------|------------------|
+| Γ     | 39.13       | 0.00             |
+| X     | 35.61       | 25.81 / 28.21    |
+| L     | 39.28       | 5.99 / 9.52      |
+
+---
+
+### 6.3 Exported Combined Data Files
+
+**Script:** `export_phonon_bands.py`
+
+**Purpose:** Merge phonon band data from multiple calculators and one DFT reference into a single text file with aligned q-vectors.
+
+**Input files per material:**
+| Method | File pattern |
+|--------|-------------|
+| DFTB+  | `phonon_results/{mat}_dftb_2x2x2/band.yaml` |
+| LAMMPS SW | `phonon_results/{mat}_sw_2x2x2/band.yaml` |
+| LAMMPS Tersoff | `phonon_results/{mat}_tersoff_2x2x2/band.yaml` |
+| LAMMPS MEAM | `phonon_results/{mat}_meam_2x2x2/band.yaml` (Si only) |
+| DFT reference | `phonondb_ref/Si_phonondb_band.yaml` (Si) or `mp_diamond_phonon_bands.dat` (diamond) |
+
+**Interpolation strategy:**  
+Because different calculators may use slightly different q-point meshes along the same path, each `band.yaml` is parsed into `(distance, frequencies, labels)`. The DFT reference distances are taken as the master grid. For every other method, frequencies are interpolated onto the master distances using linear interpolation (`numpy.interp`). This ensures all methods share exactly the same q-point sampling.
+
+**Output format:**
+```
+# qx qy qz distance dftb_b1 dftb_b2 ... dftb_b6 sw_b1 ... sw_b6 tersoff_b1 ... tersoff_b6 meam_b1 ... meam_b6 phonondb_b1 ... phonondb_b6 label
+```
+
+**Generated files:**
+- `Si_phonon_bands.dat` -- 427 q-points, 5 methods
+- `diamond_phonon_bands.dat` -- 60 q-points, 3 methods (DFTB+, Tersoff, MP DFT)
+
+---
+
+### 6.4 Comparison Plot with MP DFT Reference
+
+**Script:** `plot_mp_diamond.py`
+
+**Approach:**
+1. Load the MP DFT data from `mp_diamond_phonon_bands.dat`.
+2. Load each computed `band.yaml` from `phonon_results/`.
+3. **Interpolate onto the MP path** by matching q-points in fractional coordinates (minimum-image distance) rather than by path distance. This avoids distortions caused by different lattice constants or path definitions.
+4. Plot all methods on the MP distance axis.
+5. High-symmetry labels are taken directly from the MP data.
+
+**Output:** `plots/diamond_with_mp.png`
+
+---
+
+### 6.5 File Inventory
+
+| File | Size | Description |
+|------|------|-------------|
+| `Si_phonondb_band.yaml` | ~60 KB | Si DFT reference from phononDB |
+| `Si_phonon_bands.dat` | 211 KB | Combined Si bands (5 methods, 427 q-points) |
+| `mp_diamond_phonon_bands.dat` | 31 KB | Diamond DFT from Materials Project (219 q-points) |
+| `diamond_phonon_bands.dat` | 98 KB | Combined diamond bands (3 methods, 60 q-points) |
+| `plots/Si_comparison.png` | ~500 KB | Si benchmark with phononDB DFT |
+| `plots/diamond_with_mp.png` | 680 KB | Diamond benchmark with MP DFT |
+| `export_phonon_bands.py` | ~4 KB | Exporter script |
+| `plot_mp_diamond.py` | ~5 KB | MP overlay plotter |
