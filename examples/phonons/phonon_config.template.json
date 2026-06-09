@@ -9,7 +9,9 @@
     "alamode_extract": "extract.py",
     "alamode_alm": "alm",
     "alamode_anphon": "anphon",
-    "phonondb_dir": "/path/to/phononDB_repo"
+    "phonondb_dir": "/path/to/phononDB_repo",
+    "firecore_path": "/path/to/FireCore",
+    "mmff_data_dir": "/path/to/FireCore/cpp/common_resources"
   },
   "potentials": {
     "si_sw": "/path/to/lammps/potentials/Si.sw",

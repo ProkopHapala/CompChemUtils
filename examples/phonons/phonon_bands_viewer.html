@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Phonon Band Viewer</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #f8f9fa; }
+  #header { padding: 12px 20px; background: #1a1a2e; color: #eee; }
+  #header h1 { margin: 0; font-size: 1.2rem; font-weight: 500; }
+  #layout { display: flex; height: calc(100vh - 52px); }
+  #sidebar { width: 260px; background: #fff; border-right: 1px solid #ddd; overflow-y: auto; padding: 12px; }
+  #sidebar h2 { font-size: 0.85rem; text-transform: uppercase; color: #666; margin: 12px 0 8px; }
+  #parity { font-size: 0.78rem; color: #444; line-height: 1.35; }
+  #parity .pair { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #eee; }
+  .ds-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 0.9rem; }
+  .ds-row input[type=checkbox] { cursor: pointer; }
+  .ds-row label { cursor: pointer; flex: 1; }
+  #plot { flex: 1; min-width: 0; }
+  #status { padding: 8px 20px; color: #c00; font-size: 0.85rem; }
+</style>
+</head>
+<body data-file="phonon_bands.json">
+<div id="header"><h1 id="title">Phonon Band Viewer</h1></div>
+<div id="status"></div>
+<div id="layout">
+  <div id="sidebar"><h2>Datasets</h2><div id="controls"></div><h2>Parity</h2><div id="parity"></div></div>
+  <div id="plot"></div>
+</div>
+<script>
+const COLORS = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf','#aec7e8','#ffbb78','#98df8a','#ff9896','#c5b0d5','#c49c94','#f7b6d2','#c7c7c7','#dbdb8d','#9edae5'];
+let data = /*__PHONON_DATA__*/null;
+let visibility = [];
+
+async function loadData() {
+  const file = document.body.dataset.file;
+  if (data) return data;
+  if (!file) throw new Error('No data file specified and no embedded data');
+  const resp = await fetch(file);
+  if (!resp.ok) throw new Error(`Failed to load ${file}: ${resp.status}`);
+  data = await resp.json();
+  return data;
+}
+
+function buildControls() {
+  const ctrl = document.getElementById('controls');
+  ctrl.innerHTML = '';
+  data.datasets.forEach((ds, i) => {
+    visibility[i] = ds.visible !== false;
+    const row = document.createElement('div');
+    row.className = 'ds-row';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = visibility[i];
+    cb.id = `ds-${i}`;
+    cb.addEventListener('change', () => { visibility[i] = cb.checked; redraw(); });
+    const lab = document.createElement('label');
+    lab.htmlFor = `ds-${i}`;
+    const dash = ds.name.includes('phonopy') ? ' (phonopy)' : (ds.name.includes('signed') ? ' (signed ω)' : '');
+    lab.textContent = ds.name;
+    lab.title = dash;
+    lab.style.color = COLORS[i % COLORS.length];
+    row.appendChild(cb);
+    row.appendChild(lab);
+    ctrl.appendChild(row);
+  });
+}
+
+function redraw() {
+  const dists = data.distances;
+  const traces = [];
+  data.datasets.forEach((ds, i) => {
+    if (!visibility[i]) return;
+    const nband = ds.frequencies[0].length;
+    const color = COLORS[i % COLORS.length];
+    const dash = ds.name.includes('phonopy') ? 'dash' : (ds.name.includes('signed') ? 'dot' : 'solid');
+    for (let b = 0; b < nband; b++) {
+      traces.push({
+        x: dists, y: ds.frequencies.map(f => f[b]),
+        mode: 'lines', line: { color, width: 1.2, dash },
+        name: ds.name + (nband > 1 ? ` b${b+1}` : ''),
+        legendgroup: ds.name, showlegend: b === 0,
+        hovertemplate: `${ds.name}<br>q=%{x:.4f}<br>ω=%{y:.3f} THz<extra></extra>`,
+      });
+    }
+  });
+  const shapes = (data.tick_positions || []).map(p => ({
+    type: 'line', x0: p, x1: p, y0: 0, y1: 1, yref: 'paper',
+    line: { color: '#000', width: 0.5, dash: 'dot' },
+  }));
+  Plotly.react('plot', traces, {
+    title: { text: data.title || 'Phonon Bands', font: { size: 14 } },
+    xaxis: { title: 'Wave Vector', tickvals: data.tick_positions, ticktext: data.tick_labels },
+    yaxis: { title: 'Frequency (THz)', rangemode: 'tozero' },
+    shapes, margin: { t: 40, r: 20, b: 50, l: 60 },
+    legend: { orientation: 'h', y: 1.12 },
+    hovermode: 'closest',
+  }, { responsive: true, displayModeBar: true });
+}
+
+function buildParity() {
+  const el = document.getElementById('parity');
+  if (!data.parity || !data.parity.length) { el.innerHTML = '<em>No parity data</em>'; return; }
+  el.innerHTML = data.parity.map(p =>
+    `<div class="pair"><b>${p.pair}</b><br>max|Δω|=${p.max_abs_THz.toExponential(3)} THz, rms=${p.rms_THz.toExponential(3)} THz<br><span>${p.note||''}</span></div>`
+  ).join('');
+}
+
+async function init() {
+  try {
+    await loadData();
+    document.getElementById('title').textContent = data.title || 'Phonon Band Viewer';
+    buildControls();
+    buildParity();
+    redraw();
+  } catch (e) {
+    document.getElementById('status').textContent = e.message;
+  }
+}
+init();
+</script>
+</body>
+</html>
