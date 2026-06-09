@@ -5,18 +5,123 @@ and overlay/benchmark phonon dispersion curves for bulk Si and diamond.
 
 ## Files
 
+### Modular Phonon Pipeline (NEW)
+
+| File | Purpose |
+|------|---------|
+| `phonon_utils.py` | Core library: structure loading, QPath handling, PhononCalculator with caching |
+| `phonon_backends.py` | Pluggable force calculators: DFTBBackend, LAMMPSBackend, MMFFBackend |
+| `run_phonon.py` | Main CLI: compute phonon bands with any backend, supports q-path files and auto-generation |
+| `plot_phonon_comparison.py` | Multi-method comparison plotter with strict q-path validation |
+| `plot_bz_paths_3d.py` | 3D Brillouin zone path visualizer (matplotlib) |
+
+### Legacy Workflows (still functional)
+
 | File | Purpose |
 |------|---------|
 | `phonon_config.json` | Tool and potential path configuration (edit for your system) |
 | `download_phonon_refs.py` | Download phonon data from MP, phonondb, Mendeley Data |
 | `setup_alamode_phonon.py` | Generate ALAMODE + LAMMPS input files |
 | `setup_dftb_phonon.py` | Generate DFTB+ + phonopy input files |
+| `run_alamode_phonon.py` | ALAMODE + LAMMPS runner |
+| `run_phonopy_phonon.py` | Original phonopy + DFTB/LAMMPS runner (reference) |
 | `plot_phonon_benchmark.py` | Overlay and benchmark phonon dispersions |
+| `plot_phonons.py` | Simple phonon band plotter |
+| `plot_alamode_overlay.py` | ALAMODE-specific overlay plotter |
+| `export_phonon_bands.py` | Export multi-method bands to single text file |
 | `experimental_phonon_data.json` | Reference INS data points (Si & diamond) |
+
+### Deprecated Files
+
+| File | Status |
+|------|--------|
+| `run_phonon.py.bak` | Backup of original run_phonon.py (can delete) |
+| `plot_phonon_comparison copy.py` | Duplicate (can delete) |
+| `plot_comparison.py` | Superseded by plot_phonon_comparison.py |
+| `plot_mp_diamond.py` | Superseded by plot_phonon_comparison.py |
 
 ## Quick Start
 
-### 0. Configure tool paths
+### Modular Phonon Pipeline (Recommended)
+
+The new modular system (`phonon_utils.py`, `phonon_backends.py`, `run_phonon.py`) provides:
+- **Backend-agnostic**: DFTB+, LAMMPS, or MMFF force calculators via pluggable backends
+- **Caching**: Force constants cached by hash; only recomputed if structure/backend changes
+- **Flexible q-paths**: Load from file (`--q-path-file`) or auto-generate (`--q-path-auto`)
+- **Metadata**: Computed results save structure_file, method, program, basis_set for plotting
+
+#### Compute phonon bands
+
+```bash
+# Primitive cell with Tersoff potential, auto-generated FCC path
+python run_phonon.py \
+    --structure ../../data/crystals/diamond_primitive.cif \
+    --method tersoff \
+    --supercell 3 3 3 \
+    --q-path-auto fcc_mp \
+    --outdir test_primitive
+
+# Primitive cell with DFTB+, custom q-path file
+python run_phonon.py \
+    --structure ../../data/crystals/Si_primitive.cif \
+    --method dftb \
+    --supercell 3 3 3 \
+    --q-path-file Si_qpath_ref.dat \
+    --slakos-dir /home/prokop/SIMULATIONS/dftbplus/slakos/pbc-0-3 \
+    --outdir test_primitive
+
+# Force recompute (skip cache)
+python run_phonon.py --structure ... --method ... --force-recompute
+```
+
+#### Available q-path presets
+
+| Preset | High-symmetry points | Description |
+|--------|---------------------|-------------|
+| `fcc_mp` | Γ → X → K → Γ → L → X → W → K | Materials Project standard for FCC |
+| `diamond_standard` | Γ → X → W → K → Γ → L → U → W | Standard diamond dispersion path |
+
+#### Compare multiple methods
+
+```bash
+python plot_phonon_comparison.py \
+    --calc test_primitive/diamond_primitive_tersoff_3x3x3/phonon_bands.npz \
+    --calc test_primitive/diamond_primitive_dftb_3x3x3/phonon_bands.npz \
+    --ref mp_diamond_phonon_bands.dat \
+    --ref-label "DFT reference (MP)" \
+    --output plots/diamond_comparison.png
+```
+
+**Key features:**
+- Strict q-path validation: skips calculations with mismatched q-points
+- Auto-labels: `program/method/basis` (e.g., `lammps/tersoff`, `dftb+/pbc-0-3`)
+- Single structure title: derived from input filename
+- Multi-method reference support: extracts specific method columns from multi-column .dat files
+
+#### Visualize k-point paths in 3D
+
+```bash
+python plot_bz_paths_3d.py \
+    --cell ../../data/crystals/diamond_primitive.cif \
+    --path diamond_fcc_path.dat --name "FCC standard" \
+    --path mp_diamond_phonon_bands.dat --name "MP reference" \
+    --output plots/bz_paths_diamond.png
+```
+
+#### Output files
+
+| File | Contents |
+|------|----------|
+| `{structure}_{method}_{NxNxN}/force_constants.npz` | Cached force constants (hash-based) |
+| `{structure}_{method}_{NxNxN}/phonon_state.json` | Cache state (structure/backend hash) |
+| `{structure}_{method}_{NxNxN}/phonon_bands.npz` | qpts, distances, frequencies, labels, metadata |
+| `{structure}_{method}_{NxNxN}/band.yaml` | Phonopy-compatible band structure |
+| `{structure}_{method}_{NxNxN}/band.dat` | Text format (qpts, dists, freqs) |
+| `{structure}_{method}_{NxNxN}/band.png` | Quick single-method plot |
+
+### Legacy Workflows (ALAMODE + Phonopy)
+
+#### 0. Configure tool paths (legacy workflows only)
 
 Copy or edit `phonon_config.json` to point to your installed tools:
 
@@ -357,3 +462,88 @@ Both SK sets agree within ~2 % on Si–H stretches; pbc-0-3 produces slightly so
 | Si₁₀H₁₆ | 26 | not timed (killed) | ~2 min |
 
 PySCF scales steeply with system size; for >15 atoms consider running overnight or using a cheaper basis (e.g., `sto-3g` for quick tests). DFTB+ remains fast enough for interactive use up to ~50 atoms.
+
+---
+
+## Deprecation
+
+## Files for Git
+
+### NEW files (add to git)
+
+```
+phonon_utils.py
+phonon_backends.py
+plot_phonon_comparison.py
+plot_bz_paths_3d.py
+diamond_fcc_path.dat
+```
+
+### MODIFIED files (commit changes)
+
+```
+run_phonon.py
+README.md
+```
+
+### DEPRECATED files (safe to delete)
+
+```
+run_phonon.py.bak
+plot_phonon_comparison copy.py
+plot_comparison.py
+plot_mp_diamond.py
+```
+
+### LEGACY files (keep — still functional)
+
+```
+download_phonon_refs.py
+setup_alamode_phonon.py
+setup_dftb_phonon.py
+run_alamode_phonon.py
+run_phonopy_phonon.py
+plot_phonon_benchmark.py
+plot_phonons.py
+plot_alamode_overlay.py
+export_phonon_bands.py
+experimental_phonon_data.json
+phonon_config.json
+phonon_config.template.json
+phonon_config_pbc.json
+```
+
+### Data files (keep)
+
+```
+mp_diamond_phonon_bands.dat
+Si_phonon_bands.dat
+Si_qpath_ref.dat
+diamond_phonon_bands.dat
+```
+
+### Test directories (keep)
+
+```
+test_primitive/  # Results from modular pipeline tests
+phonon_results/  # Legacy ALAMODE results
+phonon_results_pbc/  # Legacy DFTB results
+alamode_results/  # Legacy ALAMODE results
+benchmarks/  # Benchmark data
+plots/  # Generated plots
+```
+
+---
+
+## Summary of Implementation
+
+The modular phonon pipeline ([phonon_utils.py](cci:7://file:///home/prokop/git/CompChemUtils/examples/phonons/phonon_utils.py:0:0-0:0), [phonon_backends.py](cci:7://file:///home/prokop/git/CompChemUtils/examples/phonons/phonon_backends.py:0:0-0:0), [run_phonon.py](cci:7://file:///home/prokop/git/CompChemUtils/examples/phonons/run_phonon.py:0:0-0:0)) provides:
+
+1. **Backend-agnostic force calculation**: DFTB+, LAMMPS, MMFF via pluggable backends
+2. **Hash-based caching**: Force constants cached; only recomputed if structure/backend changes
+3. **Flexible q-paths**: Load from file or auto-generate from presets (`fcc_mp`, `diamond_standard`)
+4. **Metadata preservation**: `structure_file`, `method`, `program`, `basis_set` saved for plotting
+5. **3D BZ visualization**: [plot_bz_paths_3d.py](cci:7://file:///home/prokop/git/CompChemUtils/examples/phonons/plot_bz_paths_3d.py:0:0-0:0) for comparing k-point paths
+6. **Rigorous comparison**: [plot_phonon_comparison.py](cci:7://file:///home/prokop/git/CompChemUtils/examples/phonons/plot_phonon_comparison.py:0:0-0:0) validates q-path matching and extracts specific method columns from multi-method reference files
+
+The README has been updated with full usage documentation.
