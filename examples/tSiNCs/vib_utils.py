@@ -15,6 +15,10 @@ from pathlib import Path
 from ase.io import read, write
 from ase.optimize import BFGS
 from ase.vibrations import Vibrations, Infrared
+from vib_store import (
+    freq_npy_path, hessian_npy_path, relaxed_xyz_path, modes_txt_path, modes_xyz_path,
+    opt_traj_path, ensure_method_dir, save_modes_npy,
+)
 
 SK_PATHS = {
     'mio-1-1':   '/home/prokop/SIMULATIONS/dftbplus/slakos/mio-1-1/',
@@ -99,11 +103,11 @@ class PySCFCalc:
         self.verbose = verbose
         self.results = {}
 
-    def get_potential_energy(self, atoms):
+    def get_potential_energy(self, atoms, **kwargs):
         self.calculate(atoms)
         return self.results['energy']
 
-    def get_forces(self, atoms):
+    def get_forces(self, atoms, **kwargs):
         self.calculate(atoms)
         return self.results['forces']
 
@@ -194,11 +198,6 @@ def make_cp2k_calc(atoms, xc='PBE', basis_set='SZV-MOLOPT-SR-GTH'):
 # Geometry optimization with caching
 # ============================================================
 
-def relaxed_xyz_path(mol_name, method_tag, workdir='.'):
-    """Return path for cached relaxed geometry XYZ file."""
-    return Path(workdir) / f'{mol_name}_{method_tag}_relaxed.xyz'
-
-
 def optimize_and_cache(atoms, mol_name, method_tag, fmax=0.001, steps=500, workdir='.'):
     """
     Optimize geometry. Load from cache if available, else run and save.
@@ -212,7 +211,8 @@ def optimize_and_cache(atoms, mol_name, method_tag, fmax=0.001, steps=500, workd
         return read(str(xyz_path))
     
     print(f"  [opt] Optimizing {mol_name} / {method_tag} (fmax={fmax})...")
-    traj_path = Path(workdir) / f'{mol_name}_{method_tag}_opt.traj'
+    ensure_method_dir(mol_name, method_tag, workdir)
+    traj_path = opt_traj_path(mol_name, method_tag, workdir)
     opt = BFGS(atoms, trajectory=str(traj_path))
     opt.run(fmax=fmax, steps=steps)
     
@@ -231,16 +231,6 @@ def _ase_vib_tmp_dir(mol_name, method_tag):
     return tempfile.mkdtemp(prefix=f'asevib_{mol_name}_{method_tag}_')
 
 
-def freq_npy_path(mol_name, method_tag, workdir='.'):
-    """Path for saved frequency numpy array."""
-    return Path(workdir) / f'{mol_name}_{method_tag}_freq.npy'
-
-
-def hessian_npy_path(mol_name, method_tag, workdir='.'):
-    """Path for saved Hessian numpy array (n_atoms x 3 x n_atoms x 3)."""
-    return Path(workdir) / f'{mol_name}_{method_tag}_hessian.npy'
-
-
 def compute_or_load_vibrations(atoms, mol_name, method_tag, workdir='.', with_ir=False):
     """
     Compute vibrational frequencies. Load from cache if already computed.
@@ -254,19 +244,22 @@ def compute_or_load_vibrations(atoms, mol_name, method_tag, workdir='.', with_ir
         return np.load(str(npy_path))
     
     print(f"  [vib] Computing vibrations for {mol_name} / {method_tag}...")
-    name_prefix = vib_cache_dir(mol_name, method_tag, workdir)
-    vib = Vibrations(atoms, name=name_prefix)
+    tmp_dir = _ase_vib_tmp_dir(mol_name, method_tag)
+    vib = Vibrations(atoms, name=str(Path(tmp_dir) / 'vib'))
     vib.run()
     vib.summary()
     
     freqs = vib.get_frequencies()
+    ensure_method_dir(mol_name, method_tag, workdir)
     np.save(str(npy_path), freqs)
     print(f"  [vib] Done. Saved to {npy_path}")
+    import shutil
+    shutil.rmtree(tmp_dir, ignore_errors=True)
     
     if with_ir:
         try:
-            ir_prefix = str(Path(workdir) / f'{mol_name}_{method_tag}_ir')
-            ir = Infrared(atoms, name=ir_prefix)
+            ir_tmp = _ase_vib_tmp_dir(mol_name, method_tag + '_ir')
+            ir = Infrared(atoms, name=str(Path(ir_tmp) / 'ir'))
             ir.run()
             ir.summary()
         except Exception as e:
@@ -442,8 +435,9 @@ def run_pyscf_with_hessian(mol_name, atoms_in, method='b3lyp', basis='sto-3g', f
         atoms_opt = read(str(xyz_path))
     else:
         print(f"  [opt] Optimizing {mol_name} via ASE BFGS + PySCF {method}/{basis}...")
+        ensure_method_dir(mol_name, method_tag, workdir)
         atoms.calc = PySCFCalc(method=method, basis=basis, charge=0, spin=0, verbose=0)
-        traj_path = Path(workdir) / f'{mol_name}_{method_tag}_opt.traj'
+        traj_path = opt_traj_path(mol_name, method_tag, workdir)
         opt = BFGS(atoms, trajectory=str(traj_path))
         opt.run(fmax=fmax, steps=500)
         atoms_opt = atoms.copy()
@@ -522,7 +516,9 @@ def plot_hessians(mol_name, method_tags, workdir='.', figsize=(14, 5)):
     plt.suptitle(f'Hessian Matrix Comparison - {mol_name}', fontsize=14)
     plt.tight_layout()
 
-    out_path = Path(workdir) / f'{mol_name}_hessian_comparison.png'
+    from vib_store import plots_dir
+    out_path = plots_dir(workdir, mol_name) / 'hessian_comparison.png'
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(out_path), dpi=150)
     print(f"Saved: {out_path}")
     return fig
@@ -683,12 +679,32 @@ def run_pyscf(mol_name, atoms_in, method='b3lyp', basis='sto-3g', fmax=0.001, wo
 # Frequency filtering
 # ============================================================
 
-def filter_real_freqs(freqs, threshold=10.0):
+def is_real_vib_freq(f, threshold=10.0, imag_tol=1e-2):
+    """True for real vibrational frequency above threshold (ASE imaginary TR modes rejected)."""
+    fval = f.real if np.iscomplexobj(f) else float(f)
+    imag = abs(f.imag) if np.iscomplexobj(f) else 0.0
+    return imag <= imag_tol and fval > threshold
+
+
+def filter_real_freqs(freqs, threshold=10.0, imag_tol=1e-2):
     """Return only real positive frequencies above threshold (cm^-1)."""
     if np.iscomplexobj(freqs):
-        mask = (freqs.imag == 0) & (freqs.real > threshold)
+        mask = np.array([is_real_vib_freq(f, threshold, imag_tol) for f in freqs])
         return freqs[mask].real
     return freqs[freqs > threshold]
+
+
+def select_real_modes(freqs, modes, threshold=10.0, imag_tol=1e-2):
+    """Filter modes paired with real frequencies above threshold. Returns (mode_freqs, mode_list)."""
+    if len(modes) != len(freqs):
+        raise ValueError(f'freqs ({len(freqs)}) and modes ({len(modes)}) length mismatch — re-export from Hessian')
+    mode_freqs, sel = [], []
+    for f, m in zip(freqs, modes):
+        if not is_real_vib_freq(f, threshold, imag_tol):
+            continue
+        mode_freqs.append(f.real if np.iscomplexobj(f) else float(f))
+        sel.append(m)
+    return np.asarray(mode_freqs), sel
 
 
 # ============================================================
@@ -706,7 +722,8 @@ def export_modes_to_ascii(atoms, freqs, modes, mol_name, method_tag, workdir='.'
         modes: array of shape (n_modes, n_atoms, 3) - displacement vectors
         mol_name, method_tag, workdir, threshold
     """
-    fname = Path(workdir) / f'{mol_name}_{method_tag}_modes.txt'
+    ensure_method_dir(mol_name, method_tag, workdir)
+    fname = modes_txt_path(mol_name, method_tag, workdir)
     syms = atoms.get_chemical_symbols()
     pos = atoms.get_positions()
     n_atoms = len(atoms)
@@ -751,7 +768,7 @@ def export_modes_to_xyz(atoms, freqs, modes, mol_name, method_tag, workdir='.', 
         modes: array of shape (n_modes, n_atoms, 3) - displacement vectors
         mol_name, method_tag, workdir, threshold
     """
-    fname = Path(workdir) / f'{mol_name}_{method_tag}_all_modes.xyz'
+    fname = modes_xyz_path(mol_name, method_tag, workdir)
     syms = atoms.get_chemical_symbols()
     pos = atoms.get_positions()
     n_atoms = len(atoms)
@@ -777,6 +794,8 @@ def export_modes_to_xyz(atoms, freqs, modes, mol_name, method_tag, workdir='.', 
 
 
 def export_all_results(atoms, freqs, modes, mol_name, method_tag, workdir='.', threshold=10.0):
-    """Export consolidated results: .npy (freqs already saved), ASCII, XYZ."""
+    """Export consolidated results: modes.npy, ASCII, multi-frame XYZ with eigenvectors."""
+    mode_freqs, real_modes = select_real_modes(freqs, modes, threshold=threshold)
+    save_modes_npy(mol_name, method_tag, real_modes, mode_freqs, workdir=workdir)
     export_modes_to_ascii(atoms, freqs, modes, mol_name, method_tag, workdir=workdir, threshold=threshold)
     export_modes_to_xyz(atoms, freqs, modes, mol_name, method_tag, workdir=workdir, threshold=threshold)
