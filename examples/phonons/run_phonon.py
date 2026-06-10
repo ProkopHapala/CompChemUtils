@@ -75,7 +75,8 @@ def run_phonon(structure_path, method, qpath, supercell, outdir,
                config=None, force_recompute=False, mtp_file=None,
                slakos_dir=None, backend_kwargs=None,
                band_solver=None, freq_convention='positive',
-               parity_check=False, parity_tol=0.01, mmff_fc_mode='hessian', hessian_pbc=True):
+               parity_check=False, parity_tol=0.01, mmff_fc_mode='hessian', hessian_pbc=True,
+               mmff_enable_angles=False, mmff_use_uff=False, mmff_scale_bond=None, mmff_scale_angle=None):
     """
     structure_path: path to .cif or .xyz file
     method: 'dftb', 'tersoff', 'sw', 'meam', 'mtp', 'mmff'
@@ -93,10 +94,7 @@ def run_phonon(structure_path, method, qpath, supercell, outdir,
         structure_path = resolve_mmff_structure(structure_path, fc_path)
     print(f"[struct] Loading {structure_path}")
     positions, cell, symbols, is_prim = read_structure(structure_path)
-    if method == "mmff":
-        positions = positions * BOHR_TO_ANG
-        cell = cell * BOHR_TO_ANG
-        print(f"[struct] FireCore crystal: converted Bohr -> Angstrom for phonopy/MMFF")
+    # MMFF xyz is already in Angstrom (FireCore native units) — no conversion needed
     print(f"[struct] {len(symbols)} atoms, primitive={is_prim}")
     print(f"[struct] Cell: {cell[0,0]:.4f} x {cell[1,1]:.4f} x {cell[2,2]:.4f} Ang")
     
@@ -112,6 +110,10 @@ def run_phonon(structure_path, method, qpath, supercell, outdir,
     if method == "mmff":
         backend_kwargs.setdefault("fc_mode", mmff_fc_mode)
         backend_kwargs.setdefault("hessian_pbc", hessian_pbc)
+        backend_kwargs.setdefault("enable_angles", mmff_enable_angles)
+        backend_kwargs.setdefault("use_uff", mmff_use_uff)
+        backend_kwargs.setdefault("scale_bond", mmff_scale_bond)
+        backend_kwargs.setdefault("scale_angle", mmff_scale_angle)
     
     backend = make_backend(method, config=config, **backend_kwargs)
     print(f"[backend] Using {backend.name}" + (f" fc_mode={backend.fc_mode}" if method == "mmff" else ""))
@@ -253,6 +255,14 @@ def main():
                         help="MMFF: hessian+Phi(R) (default) or phonopy displacements (experimental)")
     parser.add_argument("--hessian-pbc", action=argparse.BooleanOptionalAction, default=True,
                         help="MMFF hessian: nPBC=(1,1,1) periodic bonds (default on); --no-hessian-pbc for cluster")
+    parser.add_argument("--mmff-enable-angles", action="store_true",
+                        help="MMFF: enable angle forces (default: bonds only)")
+    parser.add_argument("--mmff-use-uff", action="store_true",
+                        help="MMFF: use UFF instead of MMFF (bMMFF=True, bUFF=True)")
+    parser.add_argument("--mmff-scale-bond", type=float, default=None,
+                        help="MMFF: scale bond stiffness by factor (e.g., 1.25 for +25%)")
+    parser.add_argument("--mmff-scale-angle", type=float, default=None,
+                        help="MMFF: scale angle stiffness by factor (e.g., 1.25 for +25%)")
     args = parser.parse_args()
     if args.method == "mmff":
         ensure_mmff_runtime()
@@ -297,6 +307,10 @@ def main():
         parity_tol=args.parity_tol,
         mmff_fc_mode=args.mmff_fc_mode,
         hessian_pbc=args.hessian_pbc,
+        mmff_enable_angles=args.mmff_enable_angles,
+        mmff_use_uff=args.mmff_use_uff,
+        mmff_scale_bond=args.mmff_scale_bond,
+        mmff_scale_angle=args.mmff_scale_angle,
     )
 
 

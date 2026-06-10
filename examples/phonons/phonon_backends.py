@@ -209,10 +209,43 @@ def resolve_mmff_structure(structure_path, firecore_path):
     )
 
 
+def _extract_phi_blocks_firecore(phi, sc_cell, sc_ia, inds_disp, n_prim, rmax=None):
+    """Build Phi(R) from rectangular phi matrix (n_sc*3 x n_disp*3) - from FireCore test_diamond_phonon_bands.py."""
+    if rmax is None:
+        rmax = max(max(abs(c[0]), abs(c[1]), abs(c[2])) for c in sc_cell)
+    Phi_blocks = {}
+    for p_idx, ip in enumerate(inds_disp):
+        ia_i = sc_ia[ip]
+        n_sc = len(sc_cell)
+        for j in range(n_sc):
+            R = sc_cell[j]
+            if max(abs(R[0]), abs(R[1]), abs(R[2])) > rmax:
+                continue
+            Rkey = tuple(R)
+            ia_j = sc_ia[j]
+            if Rkey not in Phi_blocks:
+                Phi_blocks[Rkey] = np.zeros((n_prim, n_prim, 3, 3))
+            Phi_blocks[Rkey][ia_i, ia_j] = phi[j*3:(j+1)*3, p_idx*3:(p_idx+1)*3]
+    return Phi_blocks
+
+
 def ensure_mmff_runtime():
-    """Re-exec with ASAN/FFTW preload if needed (matches FireCore tests/tMMFF/run.sh)."""
+    """Re-exec with ASAN preload only if libMMFF_lib.so was built with ASAN (Build-asan)."""
     if "libasan" in os.environ.get("LD_PRELOAD", ""):
-        return
+        return  # already set
+    # Check if the .so actually needs ASAN (Build-asan symlink vs Build-opt)
+    import ctypes.util
+    try:
+        build_path = subprocess.check_output(
+            ["python3", "-c",
+             "import sys; sys.path.insert(0,'/home/prokop/git/FireCore'); "
+             "from pyBall import cpp_utils_ as c; print(c.BUILD_PATH)"],
+            text=True, stderr=subprocess.DEVNULL).strip()
+    except Exception:
+        build_path = ""
+    needs_asan = "Build-asan" in build_path or "Build-asan" in os.path.realpath(build_path)
+    if not needs_asan:
+        return  # Build-opt: no ASAN preload needed
     gxx = subprocess.run(["which", "g++"], capture_output=True, text=True)
     if gxx.returncode != 0:
         raise RuntimeError("MMFF requires g++ for ASAN runtime; set LD_PRELOAD manually")
@@ -246,7 +279,7 @@ class MMFFBackend(BaseBackend):
     
     name = "mmff"
     
-    def __init__(self, firecore_path="", mmff_data_dir="", dx=1e-4, fc_mode="hessian", hessian_pbc=True):
+    def __init__(self, firecore_path="", mmff_data_dir="", dx=1e-4, fc_mode="hessian", hessian_pbc=True, enable_angles=False, use_uff=False, scale_bond=None, scale_angle=None):
         self.firecore_path = os.path.normpath(firecore_path or os.environ.get("FIRECORE_PATH", ""))
         if not self.firecore_path:
             raise ValueError("MMFF backend requires firecore_path in config or FIRECORE_PATH env var")
@@ -259,6 +292,10 @@ class MMFFBackend(BaseBackend):
         self.fc_mode = fc_mode
         self.hessian_pbc = hessian_pbc
         self.is_hessian_backend = fc_mode == "hessian"
+        self.enable_angles = enable_angles
+        self.use_uff = use_uff
+        self.scale_bond = scale_bond
+        self.scale_angle = scale_angle
         self._MMFF = None
         self.config = {"firecore_path": self.firecore_path, "mmff_data_dir": self.mmff_data_dir,
                        "dx": dx, "fc_mode": fc_mode, "hessian_pbc": hessian_pbc}
@@ -277,22 +314,21 @@ class MMFFBackend(BaseBackend):
             self._MMFF = MMFF
         return self._MMFF
     
-    def _write_mmff_xyz(self, path, positions_bohr, cell_bohr, symbols):
+    def _write_mmff_xyz(self, path, positions, cell, symbols):
+        """Write xyz in Angstrom (MMFF native units)."""
         n = len(symbols)
         with open(path, "w") as f:
             f.write(f"{n}\n")
-            f.write(f"lvs  {cell_bohr[0,0]:.8f} {cell_bohr[0,1]:.8f} {cell_bohr[0,2]:.8f}  "
-                    f"{cell_bohr[1,0]:.8f} {cell_bohr[1,1]:.8f} {cell_bohr[1,2]:.8f}  "
-                    f"{cell_bohr[2,0]:.8f} {cell_bohr[2,1]:.8f} {cell_bohr[2,2]:.8f}\n")
-            for sym, p in zip(symbols, positions_bohr):
+            f.write(f"lvs  {cell[0,0]:.8f} {cell[0,1]:.8f} {cell[0,2]:.8f}  "
+                    f"{cell[1,0]:.8f} {cell[1,1]:.8f} {cell[1,2]:.8f}  "
+                    f"{cell[2,0]:.8f} {cell[2,1]:.8f} {cell[2,2]:.8f}\n")
+            for sym, p in zip(symbols, positions):
                 f.write(f"{sym}  {p[0]:.8f}  {p[1]:.8f}  {p[2]:.8f}\n")
 
     def _mmff_init_geometry(self, positions_ang, cell_ang, symbols, xyz_path, nPBC):
-        """Init MMFF on geometry; positions/cell in Angstrom, written as Bohr xyz."""
+        """Init MMFF on geometry; positions/cell in Angstrom (MMFF native units)."""
         MMFF = self._init_mmff()
-        pos_bohr = np.asarray(positions_ang, dtype=float) * ANG_TO_BOHR
-        cell_bohr = np.asarray(cell_ang, dtype=float) * ANG_TO_BOHR
-        self._write_mmff_xyz(xyz_path, pos_bohr, cell_bohr, symbols)
+        self._write_mmff_xyz(xyz_path, positions_ang, cell_ang, symbols)
         dp = self._mmff_data_paths()
         ptr = MMFF.init(xyz_name=xyz_path, nPBC=tuple(nPBC), bEpairs=False, bMMFF=True,
                         sElementTypes=dp["ElementTypes"], sAtomTypes=dp["AtomTypes"],
@@ -310,21 +346,21 @@ class MMFFBackend(BaseBackend):
         MMFF = self._mmff_init_geometry(positions, cell, symbols, xyz_path, nPBC=(1, 1, 1))
         MMFF.getBuffs()
         MMFF.eval()
-        forces_ha_bohr = np.array(MMFF.fapos, dtype=float).copy()
-        if forces_ha_bohr.shape[0] != len(symbols):
-            raise RuntimeError(f"MMFF fapos shape {forces_ha_bohr.shape} != natoms {len(symbols)}")
-        return forces_ha_bohr * (HA_TO_EV / BOHR_TO_ANG)
+        forces = np.array(MMFF.fapos, dtype=float).copy()  # eV/Ang (MMFF native)
+        if forces.shape[0] != len(symbols):
+            raise RuntimeError(f"MMFF fapos shape {forces.shape} != natoms {len(symbols)}")
+        return forces  # already eV/Ang, phonopy expects eV/Ang
 
     def compute_phi_blocks(self, positions, cell, symbols, super_n):
         """Build supercell, compute MMFF Hessian, return Phi(0,R) blocks.
         
-        positions/cell in Angstrom; internally converted to Bohr for MMFF.
-        Returns (Phi_blocks dict, cell_bohr ndarray).
+        positions/cell in Angstrom. MMFF operates in eV/Ang internally.
+        Returns (Phi_blocks dict, cell_ang ndarray).  Phi is in eV/Ang^2.
         """
-        from phonon_utils import build_supercell, extract_phi_blocks, BOHR_TO_ANG
-        pos_bohr = np.asarray(positions, dtype=float) * ANG_TO_BOHR
-        cell_bohr = np.asarray(cell, dtype=float) * ANG_TO_BOHR
-        sc_pos, sc_cell, sc_ia, sc_lvec, n_prim = build_supercell(pos_bohr, cell_bohr, symbols, super_n)
+        from phonon_utils import build_supercell, extract_phi_blocks
+        pos_ang  = np.asarray(positions, dtype=float)
+        cell_ang = np.asarray(cell, dtype=float)
+        sc_pos, sc_cell, sc_ia, sc_lvec, n_prim = build_supercell(pos_ang, cell_ang, symbols, super_n)
         n_sc = len(sc_pos)
         nPBC = (1, 1, 1) if self.hessian_pbc else (0, 0, 0)
         tmp_xyz = None
@@ -332,25 +368,47 @@ class MMFFBackend(BaseBackend):
             with tempfile.NamedTemporaryFile(mode='w', suffix='.xyz', delete=False) as f:
                 tmp_xyz = f.name
             sc_syms = [symbols[sc_ia[i]] for i in range(n_sc)]
-            self._write_mmff_xyz(tmp_xyz, sc_pos, sc_lvec, sc_syms)
+            self._write_mmff_xyz(tmp_xyz, sc_pos, sc_lvec, sc_syms)  # positions in Ang
             print(f"[MMFF] Supercell {super_n}x{super_n}x{super_n} = {n_sc} atoms, Hessian nPBC={nPBC}...")
             MMFF = self._init_mmff()
+            # setSwitches2: call before init to enable angles/MMFF
+            switches = {"MMFF": 1, "NonBonded": -1}
+            if self.enable_angles:
+                switches["Angles"] = 1
+            MMFF.setSwitches(**switches)
             dp = self._mmff_data_paths()
-            ptr = MMFF.init(xyz_name=tmp_xyz, nPBC=nPBC, bEpairs=False, bMMFF=True,
-                            sElementTypes=dp["ElementTypes"], sAtomTypes=dp["AtomTypes"],
-                            sBondTypes=dp["BondTypes"], sAngleTypes=dp["AngleTypes"],
-                            sDihedralTypes=dp["DihedralTypes"])
-            if ptr is None:
-                raise RuntimeError(f"MMFF.init failed for {tmp_xyz}")
-            inds = np.arange(n_sc, dtype=np.int32)
-            H_sc = MMFF.getHessian3Nx3N(inds, dx=self.dx)
-            H_sc = 0.5 * (H_sc + H_sc.T)
-            if np.isnan(H_sc).any() or np.isinf(H_sc).any():
-                raise ValueError("NaN/Inf in MMFF supercell Hessian")
-            print(f"[MMFF] Hessian norm: {np.linalg.norm(H_sc):.6e}")
-            Phi_blocks = extract_phi_blocks(H_sc, sc_cell, sc_ia, n_prim)
+            MMFF.init(xyz_name=tmp_xyz, nPBC=nPBC, bEpairs=False, bMMFF=True, bUFF=self.use_uff,
+                      sElementTypes=dp["ElementTypes"], sAtomTypes=dp["AtomTypes"],
+                      sBondTypes=dp["BondTypes"], sAngleTypes=dp["AngleTypes"],
+                      sDihedralTypes=dp["DihedralTypes"])
+            # Apply parameter scaling if requested (using FireCore API)
+            print(f"[MMFF] scale_bond={self.scale_bond}, scale_angle={self.scale_angle}")
+            if self.scale_bond is not None:
+                print("[MMFF] Calling getBuffs() for bond scaling...")
+                MMFF.getBuffs()
+                current_k = MMFF.bKs[MMFF.bKs != 0].mean()
+                MMFF.setBondParamsByType('C_3', 'C_3', k=current_k * self.scale_bond, forcefield='MMFF')
+                print(f"[MMFF] Scaled bond stiffness by {self.scale_bond}: {current_k:.3f} -> {current_k * self.scale_bond:.3f} eV/Å²")
+            if self.scale_angle is not None:
+                print("[MMFF] Calling getBuffs() for angle scaling...")
+                MMFF.getBuffs()
+                current_k = MMFF.apars[:, 1].mean()
+                MMFF.setAngleParamsByType('C_3', 'C_3', 'C_3', k=current_k * self.scale_angle, forcefield='MMFF')
+                print(f"[MMFF] Scaled angle stiffness by {self.scale_angle}: {current_k:.3f} -> {current_k * self.scale_angle:.3f} eV/rad²")
+            # Use getPhononPhiBlocks like working FireCore script (displace central atoms, read forces on all)
+            inds_total = np.arange(n_sc, dtype=np.int32)
+            central_atoms = [i for i, c in enumerate(sc_cell) if c == (0, 0, 0)]
+            inds_disp = np.array(central_atoms, dtype=np.int32)
+            print(f"[MMFF] Central cell atoms: {central_atoms}")
+            print(f"[MMFF] Computing Phi blocks (displace {len(inds_disp)} atoms, read forces on {n_sc})...")
+            phi = MMFF.getPhononPhiBlocks(inds_total, inds_disp, dx=self.dx)
+            if np.isnan(phi).any() or np.isinf(phi).any():
+                raise ValueError("NaN/Inf in MMFF Phi matrix")
+            print(f"[MMFF] Phi matrix shape: {phi.shape}, norm: {np.linalg.norm(phi):.6e}")
+            # MMFF is eV/Ang throughout: Phi is in eV/Ang^2, cell in Ang
+            Phi_blocks = _extract_phi_blocks_firecore(phi, sc_cell, sc_ia, central_atoms, n_prim)
             print(f"[MMFF] Extracted {len(Phi_blocks)} R-vector Phi blocks")
-            return Phi_blocks, cell_bohr
+            return Phi_blocks, cell_ang  # cell in Ang, Phi in eV/Ang^2
         finally:
             if tmp_xyz and os.path.exists(tmp_xyz):
                 os.unlink(tmp_xyz)
@@ -435,6 +493,10 @@ def make_backend(method, config=None, **kwargs):
             dx=kwargs.get("dx", 1e-4),
             fc_mode=kwargs.get("fc_mode", "hessian"),
             hessian_pbc=kwargs.get("hessian_pbc", True),
+            enable_angles=kwargs.get("enable_angles", False),
+            use_uff=kwargs.get("use_uff", False),
+            scale_bond=kwargs.get("scale_bond"),
+            scale_angle=kwargs.get("scale_angle"),
         )
     
     else:

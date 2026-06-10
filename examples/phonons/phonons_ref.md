@@ -536,3 +536,65 @@ Because different calculators may use slightly different q-point meshes along th
 | `plots/diamond_with_mp.png` | 680 KB | Diamond benchmark with MP DFT |
 | `export_phonon_bands.py` | ~4 KB | Exporter script |
 | `plot_mp_diamond.py` | ~5 KB | MP overlay plotter |
+
+---
+
+## MMFF Phonon Frequency Refinement (June 2026)
+
+### Achievements
+
+1. **Fixed MMFF backend unit handling**
+   - Ensured all positions, cells, and displacements are in Angstrom (FireCore native units)
+   - Removed incorrect Bohr-to-Angstrom double-conversion
+   - Phi matrix units correctly treated as eV/Å²
+   - Frequency conversion constant: 15.6337 THz per sqrt(eV/Å²/amu)
+
+2. **Integrated FireCore parameter scaling API**
+   - Added `--mmff-scale-bond` and `--mmff-scale-angle` flags to `run_phonon.py`
+   - Uses FireCore's `getBuffs()`, `setBondParamsByType()`, `setAngleParamsByType()` functions
+   - Allows runtime modification of force constants without editing parameter files
+
+3. **Diamond MMFF vs DFTB+ benchmark**
+   - DFTB+ optical at Γ: **44.10 THz**
+   - MMFF default (bonds+angles): **41.25 THz** (6.5% low)
+   - MMFF 1.25x bonds: **42.89 THz** (2.8% low)
+   - MMFF 1.25x bonds+angles: **48.15 THz** (9.1% high)
+
+4. **Enhanced plotting script**
+   - First calculation (DFTB+) automatically shown as bold black reference with "REF" prefix
+   - Custom labels supported via `--label` flag for variant identification
+   - Example: `MMFF +25% K_bond`, `MMFF +25% K_bond+K_ang`
+
+### Key Files Modified
+
+- `examples/phonons/phonon_backends.py`: Added `scale_bond`, `scale_angle` parameters to `MMFFBackend`
+- `examples/phonons/run_phonon.py`: Added CLI flags for parameter scaling
+- `examples/phonons/plot_phonon_comparison.py`: Enhanced reference line styling and custom labels
+
+### Usage Example
+
+```bash
+# MMFF with 1.25x bond stiffness scaling
+python run_phonon.py --structure diamond_primitive --method mmff \
+  --supercell 3 3 3 --q-path-file plots/diamond_qpath_280.dat \
+  --outdir test_primitive/diamond_mmff_1.25bond_3x3x3 \
+  --hessian-pbc --freq-convention signed --band-solver unified \
+  --force-recompute --mmff-enable-angles --mmff-scale-bond 1.25
+
+# Plot comparison with custom labels
+python plot_phonon_comparison.py \
+  --calc test_primitive/diamond_primitive_dftb_3x3x3/phonon_bands.npz \
+  --label "REF DFTB+" \
+  --calc test_primitive/diamond_primitive_mmff_default_3x3x3/phonon_bands.npz \
+  --label "MMFF default" \
+  --calc test_primitive/diamond_primitive_mmff_1.25bond_3x3x3/phonon_bands.npz \
+  --label "MMFF +25% K_bond" \
+  --output plots/diamond_comparison_mmff_scaling.png
+```
+
+### Notes on Force Field Terms
+
+- The `setSwitches` API in FireCore MMFF was tested but did not significantly affect the diamond phonon spectrum
+- Diamond sp3 network is bond-dominated; angle terms have minimal effect on optical modes
+- Bond stiffness scaling is the most effective way to tune optical frequencies
+- To match DFTB+ (44.10 THz) from MMFF default (41.25 THz): scale factor ≈ 1.33

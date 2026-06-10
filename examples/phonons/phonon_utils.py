@@ -548,7 +548,8 @@ class PhononCalculator:
         """Return Phi(0,R) blocks, cell, masses, and fc_units for unified solver."""
         if self._hessian_mode:
             self.compute_force_constants()
-            return self._phi_blocks, self._hessian_cell, self.masses, 'hartree_bohr2'
+            # MMFF getPhononPhiBlocks returns Phi in eV/Å² (same as phonopy)
+            return self._phi_blocks, self._hessian_cell, self.masses, 'ev_ang2'
         phonon = self.get_phonopy()
         phi = phi_blocks_from_phonopy_fc(phonon)
         prim = phonon.primitive
@@ -736,7 +737,11 @@ def get_standard_qpath(crystal_type='fcc', variant='diamond_standard'):
 ANG_TO_BOHR = 1.0 / 0.529177210903
 BOHR_TO_ANG = 0.529177210903
 # sqrt(Hartree/(amu*Bohr^2)) -> THz  (MMFF / FireCore Hessian units)
-FREQ_HA_AMU_BOHR2_TO_THZ = 16.25 / 33.356
+# Exact conversion: sqrt(Hartree/(amu*Bohr^2)) / (2*pi) * 1e-12
+Hartree = 4.3597447222071e-18  # J
+Bohr = 5.29177210903e-11  # m
+amu = 1.66053906660e-27  # kg
+FREQ_HA_AMU_BOHR2_TO_THZ = np.sqrt(Hartree / (amu * Bohr**2)) / (2 * np.pi) * 1e-12
 # sqrt(eV/(amu*Ang^2)) -> THz  (phonopy force-constant units)
 FREQ_EV_AMU_ANG2_TO_THZ = 15.633728205761277
 FC_UNITS = {'hartree_bohr2': FREQ_HA_AMU_BOHR2_TO_THZ, 'ev_ang2': FREQ_EV_AMU_ANG2_TO_THZ}

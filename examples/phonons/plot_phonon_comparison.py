@@ -229,16 +229,26 @@ def plot_comparison(calcs, refs, output, title=None, ref_label="DFT reference (M
         color_idx += 1
 
     # Calculations — validated against master q-path
-    for calc in calcs:
+    for i, calc in enumerate(calcs):
         if not validate_qpath_match(master_qpts, calc['qpts'], calc['display_label']):
             continue
         freqs = calc['freqs']
-        color = colors[color_idx % len(colors)]
-        for b in range(freqs.shape[1]):
-            ax.plot(master_dists, freqs[:, b], color=color, alpha=0.7, lw=1.2)
-        ax.plot([], [], color=color, label=calc['display_label'], lw=2)
-        print(f"[plot] {calc['display_label']}: {freqs.shape[1]} bands")
-        color_idx += 1
+        label = calc['display_label']
+        
+        # First calculation (DFTB+) as reference: bold black
+        if i == 0 and 'dftb' in label.lower():
+            if not label.startswith('REF'):
+                label = f"REF {label}"
+            for b in range(freqs.shape[1]):
+                ax.plot(master_dists, freqs[:, b], color="black", alpha=0.8, lw=2.0)
+            ax.plot([], [], color="black", label=label, lw=2)
+        else:
+            color = colors[color_idx % len(colors)]
+            for b in range(freqs.shape[1]):
+                ax.plot(master_dists, freqs[:, b], color=color, alpha=0.7, lw=1.2)
+            ax.plot([], [], color=color, label=label, lw=2)
+            color_idx += 1
+        print(f"[plot] {label}: {freqs.shape[1]} bands")
 
     ax.set_ylabel("Frequency (THz)", fontsize=12)
     ax.set_xlabel("Wave Vector", fontsize=12)

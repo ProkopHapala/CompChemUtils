@@ -10,61 +10,14 @@ tmp/
 # User / agent tooling (not part of repo)
 .devin/
 
-# --- examples/phonons: run outputs (regenerate locally) ---
-examples/phonons/test_primitive/
-examples/phonons/phonon_results/
-examples/phonons/phonon_results_pbc/
-examples/phonons/relax_*/
-examples/phonons/alamode_results/
-examples/phonons/benchmarks/
-examples/phonons/phonondb_ref/
-examples/phonons/phonondb_si/
-examples/phonons/Articles/
-
-# Machine-specific tool paths
-examples/phonons/phonon_config.json
-examples/phonons/phonon_config_pbc.json
-
-# Generated plots/exports (keep essential q-path .dat below)
-examples/phonons/plots/*
-!examples/phonons/plots/diamond_qpath_280.dat
-
-# Phonon run artifacts
-examples/phonons/**/*.npz
-examples/phonons/**/band.dat
-examples/phonons/**/band.png
-examples/phonons/**/band.yaml
-examples/phonons/**/phonon_state.json
-examples/phonons/**/disp-*/
-examples/phonons/**/detailed.out
-examples/phonons/**/charges.bin
-examples/phonons/**/*.force
-examples/phonons/**/log.lammps
-examples/phonons/**/dump.*
-
-# Downloaded reference data (fetch via download_phonon_refs.py)
-examples/phonons/mp_diamond_phonon_bands.dat
-examples/phonons/mp_diamond_path_segments.npy
-examples/phonons/diamond_phonon_bands.dat
-examples/phonons/Si_phonon_bands.dat
-examples/phonons/relax_*_summary.dat
-
-# Legacy local-only scripts
-examples/phonons/test_diamond_phonon_bands.py
-examples/phonons/phonons_improvement.md
-
-# --- examples/fukui: results ---
-examples/fukui/results/
-examples/fukui/results_DZVP/
-
-# --- examples/tSiNCs: run outputs ---
-examples/tSiNCs/results/
-examples/tSiNCs/SiCH_small_export/
-examples/tSiNCs/detailed.out
-examples/tSiNCs/dftb.out
-examples/tSiNCs/dftb_in.hsd
-examples/tSiNCs/dftb_pin.hsd
-examples/tSiNCs/geo_end.gen
+*.npz
+*.npy
+*.dat
+*.log
+*.out
+*.jpg
+*.png
+*.svg
 
 # External data symlink/copy (use FireCore repo directly)
 data/FireCore/
