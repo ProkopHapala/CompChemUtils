@@ -22,8 +22,29 @@ import json
 import subprocess
 import tempfile
 from pathlib import Path
+from contextlib import contextmanager
 
 import numpy as np
+
+
+@contextmanager
+def _suppress_native_output(enabled=False):
+    if not enabled:
+        yield
+        return
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    saved_out = os.dup(1)
+    saved_err = os.dup(2)
+    try:
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+        yield
+    finally:
+        os.dup2(saved_out, 1)
+        os.dup2(saved_err, 2)
+        os.close(saved_out)
+        os.close(saved_err)
+        os.close(devnull)
 
 
 class BaseBackend:
@@ -298,7 +319,8 @@ class MMFFBackend(BaseBackend):
         self.scale_angle = scale_angle
         self._MMFF = None
         self.config = {"firecore_path": self.firecore_path, "mmff_data_dir": self.mmff_data_dir,
-                       "dx": dx, "fc_mode": fc_mode, "hessian_pbc": hessian_pbc}
+                       "dx": dx, "fc_mode": fc_mode, "hessian_pbc": hessian_pbc,
+                       "scale_bond": self.scale_bond, "scale_angle": self.scale_angle}
     
     def _mmff_data_paths(self):
         d = self.mmff_data_dir
@@ -371,8 +393,11 @@ class MMFFBackend(BaseBackend):
             self._write_mmff_xyz(tmp_xyz, sc_pos, sc_lvec, sc_syms)  # positions in Ang
             print(f"[MMFF] Supercell {super_n}x{super_n}x{super_n} = {n_sc} atoms, Hessian nPBC={nPBC}...")
             MMFF = self._init_mmff()
-            # setSwitches2: call before init to enable angles/MMFF
-            switches = {"MMFF": 1, "NonBonded": -1}
+            # setSwitches: call before init to enable angles/MMFF
+            # NOTE: Explicitly disable PiSigma/PiPiI so bond scaling affects ALL
+            # force constants. Otherwise unscaled PiSigma/PiPiI terms dominate
+            # the dynamical matrix and bond scaling has almost no effect.
+            switches = {"MMFF": 1, "NonBonded": -1, "Angles": 0, "PiSigma": 0, "PiPiI": 0}
             if self.enable_angles:
                 switches["Angles"] = 1
             MMFF.setSwitches(**switches)
@@ -412,6 +437,118 @@ class MMFFBackend(BaseBackend):
         finally:
             if tmp_xyz and os.path.exists(tmp_xyz):
                 os.unlink(tmp_xyz)
+
+    def make_phonon_session(self, positions, cell, symbols, super_n, enable_angles=True, disable_pi=True, quiet=False):
+        """Create reusable MMFFPhononSession for fast parameter scans."""
+        return MMFFPhononSession(self, positions, cell, symbols, super_n, enable_angles=enable_angles, disable_pi=disable_pi, quiet=quiet)
+
+
+class MMFFPhononSession:
+    """Reusable MMFF session for fast param scans without reinitialization.
+
+    Initializes MMFF once on an explicit NxNxN supercell and exposes:
+      - in-place scaling of bond/angle stiffness via numpy buffer wrappers
+      - repeated getPhononPhiBlocks() calls
+
+    This is intended for tight loops (grid search / optimization) where MMFF
+    init and I/O overhead would dominate.
+    """
+
+    def __init__(self, backend, positions, cell, symbols, super_n, enable_angles=True, disable_pi=True, quiet=False):
+        self.backend = backend
+        self.positions = np.asarray(positions, dtype=float)
+        self.cell = np.asarray(cell, dtype=float)
+        self.symbols = list(symbols)
+        self.super_n = int(super_n)
+        self.enable_angles = bool(enable_angles)
+        self.disable_pi = bool(disable_pi)
+        self.quiet = bool(quiet)
+
+        from phonon_utils import build_supercell
+
+        sc_pos, sc_cell, sc_ia, sc_lvec, n_prim = build_supercell(self.positions, self.cell, self.symbols, self.super_n)
+        self.sc_pos = sc_pos
+        self.sc_cell = sc_cell
+        self.sc_ia = sc_ia
+        self.sc_lvec = sc_lvec
+        self.n_prim = int(n_prim)
+        self.n_sc = len(sc_pos)
+        self.central_atoms = [i for i, c in enumerate(sc_cell) if c == (0, 0, 0)]
+
+        self.inds_total = np.arange(self.n_sc, dtype=np.int32)
+        self.inds_disp = np.array(self.central_atoms, dtype=np.int32)
+
+        self.tmp_xyz = None
+        self.MMFF = None
+
+        self._bKs0 = None
+        self._apars0 = None
+        self._bmask = None
+        self._angle_col = 1  # consistent with compute_phi_blocks() scaling path
+
+        self._init_once()
+
+    def _init_once(self):
+        with _suppress_native_output(self.quiet):
+            tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.xyz', delete=False)
+            tmp.close()
+            self.tmp_xyz = tmp.name
+
+            sc_syms = [self.symbols[self.sc_ia[i]] for i in range(self.n_sc)]
+            self.backend._write_mmff_xyz(self.tmp_xyz, self.sc_pos, self.sc_lvec, sc_syms)
+
+            MMFF = self.backend._init_mmff()
+            switches = {"MMFF": 1, "NonBonded": -1, "Angles": 1 if self.enable_angles else 0}
+            if self.disable_pi:
+                switches["PiSigma"] = 0
+                switches["PiPiI"] = 0
+            MMFF.setSwitches(**switches)
+
+            dp = self.backend._mmff_data_paths()
+            nPBC = (1, 1, 1) if self.backend.hessian_pbc else (0, 0, 0)
+            MMFF.init(xyz_name=self.tmp_xyz, nPBC=nPBC, bEpairs=False, bMMFF=True, bUFF=self.backend.use_uff,
+                      sElementTypes=dp["ElementTypes"], sAtomTypes=dp["AtomTypes"],
+                      sBondTypes=dp["BondTypes"], sAngleTypes=dp["AngleTypes"],
+                      sDihedralTypes=dp["DihedralTypes"])
+            MMFF.getBuffs()
+            self.MMFF = MMFF
+
+            self._bKs0 = np.array(MMFF.bKs, dtype=float).copy()
+            self._apars0 = np.array(MMFF.apars, dtype=float).copy()
+            self._bmask = self._bKs0 != 0.0
+
+    def set_scales(self, scale_bond=1.0, scale_angle=1.0):
+        """Set bond and angle stiffness scales in-place (no MMFF reinit)."""
+        if self.MMFF is None:
+            raise RuntimeError("MMFFPhononSession is not initialized")
+        sb = float(scale_bond)
+        sa = float(scale_angle)
+        self.MMFF.bKs[self._bmask] = self._bKs0[self._bmask] * sb
+        self.MMFF.apars[:, self._angle_col] = self._apars0[:, self._angle_col] * sa
+
+    def compute_phi_blocks(self, dx=None):
+        """Compute Phi(0,R) blocks for current parameters."""
+        if self.MMFF is None:
+            raise RuntimeError("MMFFPhononSession is not initialized")
+        dx = float(self.backend.dx if dx is None else dx)
+        with _suppress_native_output(self.quiet):
+            phi = self.MMFF.getPhononPhiBlocks(self.inds_total, self.inds_disp, dx=dx)
+        if np.isnan(phi).any() or np.isinf(phi).any():
+            raise ValueError("NaN/Inf in MMFF Phi matrix")
+        return _extract_phi_blocks_firecore(phi, self.sc_cell, self.sc_ia, self.central_atoms, self.n_prim)
+
+    def close(self):
+        if self.tmp_xyz and os.path.exists(self.tmp_xyz):
+            os.unlink(self.tmp_xyz)
+        self.tmp_xyz = None
+        self.MMFF = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+
 
 
 # ============================================================================

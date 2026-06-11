@@ -315,7 +315,105 @@ Useful if FireCore moves to a **phonopy displacement workflow** (like DFTB) inst
 
 ---
 
-## 8. Recommended workflow split (fitting phase)
+## 8. MMFF phonon fitting — 2D grid search implementation
+
+### 8.1 Goal
+
+Systematically fit MMFF bond and angle stiffness parameters to minimize RMSE between MMFF and DFT phonon spectra across the full q-point path and all bands. Avoid reinitializing MMFF in the inner loop for efficiency.
+
+### 8.2 Implementation
+
+**Key components:**
+
+| File | Role |
+|------|------|
+| `phonon_backends.py` | `MMFFPhononSession` class: reusable MMFF initialization, in-place buffer scaling, Phi computation with quiet mode |
+| `grid_fit_mmff_phonon.py` | 2D grid search script: RMSE computation, heatmap generation, HTML comparison |
+| `fit_mmff_phonon.py` | Single-parameter fitting (legacy) |
+| `export_phonon_html.py` | Interactive HTML viewer for phonon band comparisons |
+
+**MMFFPhononSession design:**
+- Initialize MMFF once on supercell
+- Expose `set_scales(scale_bond, scale_angle)` for in-place numpy buffer modification
+- `compute_phi_blocks()` with optional native output suppression
+- Context manager for automatic cleanup
+
+**Grid search algorithm:**
+1. Load DFT reference spectra from `.npz`
+2. Initialize `MMFFPhononSession` once
+3. Loop over bond and angle scaling grid (e.g., bond [1.0, 1.8], angle [0.8, 1.2])
+4. For each parameter pair:
+   - Scale bond (`bKs`) and angle (`apars`) buffers in-place
+   - Compute Phi blocks via `getPhononPhiBlocks`
+   - Solve phonon bands using unified solver
+   - Compute RMSE against DFT reference (point-by-point, band-by-band)
+5. Store RMSE matrix and best-fit spectra
+6. Generate 2D heatmap PNG and interactive HTML comparison
+
+**RMSE metric:**
+```python
+rmse = np.sqrt(np.mean((f_mmff - f_dftb)**2))
+```
+Computed over all q-points and all 6 bands (sorted by frequency at each q-point).
+
+### 8.3 Results (diamond primitive, 3×3×3, bond [1.0, 1.8], angle [0.8, 1.2])
+
+| Grid | Best RMSE (THz) | Best scale_bond | Best scale_angle |
+|------|-----------------|-----------------|------------------|
+| 10×10 | 2.412 | 1.622 | 0.933 |
+
+**Interpretation:**
+- Bonds need significant stiffening (~1.62×) to match DFT
+- Angles need slight softening (~0.93×)
+- Default MMFF (scale=1.0) gives RMSE ~3.1 THz
+- Best fit reduces error by ~22%
+
+**Output files:**
+- Heatmap: `fit_grid_bond_1.0_1.8/error_heatmap.png`
+- Comparison HTML: `fit_grid_bond_1.0_1.8/comparison_best_vs_default.html`
+
+### 8.4 Usage
+
+**Basic grid search:**
+```bash
+cd /home/prokop/git/CompChemUtils/examples/phonons
+unset LD_PRELOAD ASAN_OPTIONS
+/home/prokop/venvs/ML/bin/python grid_fit_mmff_phonon.py \
+  --structure diamond_primitive \
+  --reference test_primitive/diamond_primitive_dftb_3x3x3/phonon_bands.npz \
+  --q-path-file plots/diamond_qpath_280.dat \
+  --supercell 3 3 3 \
+  --bond-range 1.0 1.8 \
+  --angle-range 0.8 1.2 \
+  --grid-size 10 \
+  --outdir fit_grid_bond_1.0_1.8 \
+  --quiet
+```
+
+**CLI arguments:**
+- `--bond-range`: min max for bond stiffness scaling
+- `--angle-range`: min max for angle stiffness scaling
+- `--grid-size`: number of points per dimension (N×N grid)
+- `--quiet`: suppress native MMFF output during scans
+- `--force-recompute`: ignore cached Phi blocks
+
+**Quiet mode:**
+- Suppresses verbose MMFF native output during grid scans
+- Implemented via `_suppress_native_output` context manager in `MMFFPhononSession`
+- Critical for large grids (100+ MMFF evaluations)
+
+### 8.5 Integration with existing pipeline
+
+The grid fitting script reuses:
+- `phonon_utils.py`: structure loading, q-path handling, `solve_bands_from_phi`
+- `phonon_backends.py`: `MMFFBackend` config, FireCore path resolution
+- `export_phonon_html.py`: HTML template and embedding
+
+No plotting or file I/O inside the inner loop — all spectra stored in memory as numpy arrays.
+
+---
+
+## 9. Recommended workflow split (fitting phase)
 
 ```text
 /home/prokop/git/FireCore/cpp/          ← PRIMARY: MMFF, PBC, Hessian FD, fitting targets
@@ -329,10 +427,11 @@ Useful if FireCore moves to a **phonopy displacement workflow** (like DFTB) inst
 | Parameter fitting objectives (phonon RMSE vs DFTB) | **FireCore** (compute) + read refs from CompChemUtils |
 | Q-path, band plots, HTML viewer, batch benchmarks | **CompChemUtils** (unchanged) |
 | Golden references (`phonon_bands.npz`, q-path) | **CompChemUtils** — treat as read-only fixtures |
+| 2D grid search, RMSE optimization | **CompChemUtils** (grid_fit_mmff_phonon.py) |
 
 ---
 
-## 9. Commands cheat sheet
+## 10. Commands cheat sheet
 
 ### Build MMFF (opt)
 
@@ -372,7 +471,7 @@ export ASAN_OPTIONS=detect_leaks=0:halt_on_error=1
 
 ---
 
-## 10. Summary
+## 11. Summary
 
 1. **CompChemUtils** now has a modular phonon pipeline, unified Bloch solver, MMFF Hessian backend hooks, and interactive comparison HTML.
 2. **FireCore** `getHessian3Nx3N` runs on Build-opt; compile/load issues were **mixed ASAN/opt linking**, not missing source.
@@ -380,7 +479,8 @@ export ASAN_OPTIONS=detect_leaks=0:halt_on_error=1
 4. **PBC Hessian (`nPBC=(1,1,1)`)** removes negatives but produces **physically wrong** frequencies (~1.37 THz) — primary bug for **`FireCore/cpp/`**.
 5. **Memory errors** (ASAN UAF, double-free) point to **MMFF init/teardown and PBC supercell lifecycle** — must be fixed before trusting automated fitting loops.
 6. **CompChemUtils reference files** (`test_primitive/`, `plots/diamond_qpath_280.dat`, comparison HTML) are the parity oracle when working **read-only** from FireCore.
+7. **2D grid search** implemented for MMFF bond/angle stiffness fitting with RMSE optimization; best fit for diamond: scale_bond=1.62, scale_angle=0.93, RMSE=2.41 THz (22% improvement over default).
 
 ---
 
-*Generated: 2026-06-09. Session artifacts: `plots/diamond_solver_comparison.html`, `test_primitive/diamond_primitive_mmff_cluster_recompute/`, `test_primitive/diamond_primitive_mmff_pbc_3x3x3/`.*
+*Generated: 2026-06-09. Updated: 2026-06-11 (grid fitting). Session artifacts: `plots/diamond_solver_comparison.html`, `test_primitive/diamond_primitive_mmff_cluster_recompute/`, `test_primitive/diamond_primitive_mmff_pbc_3x3x3/`, `fit_grid_bond_1.0_1.8/`.*
