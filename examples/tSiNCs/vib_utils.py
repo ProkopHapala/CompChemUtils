@@ -15,9 +15,10 @@ from pathlib import Path
 from ase.io import read, write
 from ase.optimize import BFGS
 from ase.vibrations import Vibrations, Infrared
+from ase.data import atomic_masses, atomic_numbers
 from vib_store import (
     freq_npy_path, hessian_npy_path, relaxed_xyz_path, modes_txt_path, modes_xyz_path,
-    opt_traj_path, ensure_method_dir, save_modes_npy,
+    opt_traj_path, ensure_method_dir, save_modes_npy, method_dir,
 )
 
 SK_PATHS = {
@@ -522,6 +523,307 @@ def plot_hessians(mol_name, method_tags, workdir='.', figsize=(14, 5)):
     fig.savefig(str(out_path), dpi=150)
     print(f"Saved: {out_path}")
     return fig
+
+
+# ============================================================
+# MMFF molecular vibrations (non-PBC)
+# ============================================================
+
+# Unit conversions
+HA_TO_EV = 27.211386245988
+BOHR_TO_ANG = 0.529177210903
+ANG_TO_BOHR = 1.0 / BOHR_TO_ANG
+
+def run_mmff_with_hessian(mol_name, atoms_in, fmax=0.001, workdir='.',
+                          firecore_path=None, enable_angles=True, scale_bond=None, scale_angle=None, use_uff=False):
+    """
+    Full MMFF pipeline: optimize (via ASE BFGS) -> Hessian (FireCore getHessian3Nx3N) -> frequencies.
+
+    Returns (freqs, hessian_2d, modes, method_tag).
+      freqs: vibrational frequencies in cm^-1 (3N-6 modes, real only)
+      hessian_2d: (3N, 3N) Hessian in eV/Ang^2 (from MMFF)
+      modes: list of (N, 3) normalized displacement vectors
+    """
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    method_tag = 'mmff'
+    if use_uff:
+        method_tag += '_uff'
+    if enable_angles:
+        method_tag += '_angles'
+    if scale_bond:
+        method_tag += f'_bond{scale_bond:.2f}'
+    if scale_angle:
+        method_tag += f'_angle{scale_angle:.2f}'
+    
+    # FireCore path
+    if firecore_path is None:
+        firecore_path = os.environ.get('FIRECORE_PATH', '/home/prokop/git/FireCore')
+    
+    # Load cached geometry or optimize
+    xyz_path = relaxed_xyz_path(mol_name, method_tag, workdir)
+    atoms = atoms_in.copy()
+    
+    if xyz_path.exists():
+        print(f"  [cache] Loading MMFF relaxed geometry from {xyz_path}")
+        atoms_opt = read(str(xyz_path))
+    else:
+        print(f"  [opt] Optimizing {mol_name} via ASE BFGS + MMFF...")
+        ensure_method_dir(mol_name, method_tag, workdir)
+        
+        # Create MMFF ASE calculator wrapper
+        atoms.calc = MMFFCalc(firecore_path=firecore_path, enable_angles=enable_angles, scale_bond=scale_bond, scale_angle=scale_angle, use_uff=use_uff)
+        traj_path = opt_traj_path(mol_name, method_tag, workdir)
+        opt = BFGS(atoms, trajectory=str(traj_path))
+        opt.run(fmax=fmax, steps=500)
+        atoms_opt = atoms.copy()
+        write(str(xyz_path), atoms_opt)
+        print(f"  [opt] Done. Saved to {xyz_path}")
+    
+    # Check for cached frequencies/Hessian
+    npy_path = freq_npy_path(mol_name, method_tag, workdir)
+    hess_path = hessian_npy_path(mol_name, method_tag, workdir)
+    modes_path = method_dir(workdir, mol_name, method_tag) / 'modes.npy'
+    
+    if npy_path.exists() and hess_path.exists() and modes_path.exists():
+        print(f"  [cache] Loading MMFF frequencies from {npy_path}")
+        print(f"  [cache] Loading MMFF Hessian from {hess_path}")
+        freqs = np.load(str(npy_path))
+        hess = np.load(str(hess_path))
+        modes = np.load(str(modes_path), allow_pickle=True).tolist()
+        return freqs, hess, modes, method_tag
+    
+    # Compute Hessian with MMFF
+    print(f"  [vib] Computing MMFF Hessian for {mol_name}...")
+    
+    # Write XYZ for MMFF
+    syms = atoms_opt.get_chemical_symbols()
+    pos = atoms_opt.get_positions()
+    
+    tmp_xyz = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.xyz', delete=False) as f:
+            tmp_xyz = f.name
+            f.write(f"{len(syms)}\n")
+            # No lattice vectors for isolated molecule
+            f.write("MMFF molecular vibration\n")
+            for s, p in zip(syms, pos):
+                f.write(f"{s}  {p[0]:.8f}  {p[1]:.8f}  {p[2]:.8f}\n")
+        
+        # Initialize MMFF
+        sys.path.insert(0, firecore_path)
+        from pyBall import MMFF
+        
+        # Data paths
+        data_dir = os.path.join(firecore_path, "cpp/common_resources")
+        dp = {
+            "ElementTypes": os.path.join(data_dir, "ElementTypes.dat"),
+            "AtomTypes": os.path.join(data_dir, "AtomTypes.dat"),
+            "BondTypes": os.path.join(data_dir, "BondTypes.dat"),
+            "AngleTypes": os.path.join(data_dir, "AngleTypes.dat"),
+            "DihedralTypes": os.path.join(data_dir, "DihedralTypes.dat"),
+        }
+        
+        # Set switches
+        switches = {"MMFF": 1, "NonBonded": -1, "Angles": 0, "PiSigma": 0, "PiPiI": 0}
+        if enable_angles:
+            switches["Angles"] = 1
+        MMFF.setSwitches(**switches)
+        
+        # Init with nPBC=(0,0,0) for isolated molecule (no periodic images)
+        ptr = MMFF.init(xyz_name=tmp_xyz, nPBC=(0, 0, 0), bEpairs=False, bMMFF=True, bUFF=use_uff,
+                        sElementTypes=dp["ElementTypes"], sAtomTypes=dp["AtomTypes"],
+                        sBondTypes=dp["BondTypes"], sAngleTypes=dp["AngleTypes"],
+                        sDihedralTypes=dp["DihedralTypes"])
+        if ptr is None:
+            raise RuntimeError(f"MMFF.init failed for {tmp_xyz}")
+        
+        # Apply parameter scaling if requested
+        # Use setBondParamsByType and setAngleParamsByType with correct atom types
+        if scale_bond is not None or scale_angle is not None:
+            MMFF.eval()  # Populate buffers first
+            MMFF.getBuffs()
+            
+            if scale_bond is not None:
+                print(f"[MMFF] Scaling bond stiffness by {scale_bond}")
+                # For CH4: C_3-H bonds and H-C-H angles
+                current_k = MMFF.bKs[MMFF.bKs != 0].mean()
+                MMFF.setBondParamsByType('C_3', 'H_', k=current_k * scale_bond, forcefield='MMFF')
+                print(f"  C-H bond k: {current_k:.3f} -> {current_k * scale_bond:.3f} eV/Ang^2")
+            
+            if scale_angle is not None:
+                print(f"[MMFF] Scaling angle stiffness by {scale_angle}")
+                current_k = MMFF.apars[:, 1].mean()
+                # H-C-H angles
+                MMFF.setAngleParamsByType('H_', 'C_3', 'H_', k=current_k * scale_angle, forcefield='MMFF')
+                print(f"  H-C-H angle k: {current_k:.3f} -> {current_k * scale_angle:.3f} eV/rad^2")
+        
+        # Get Hessian (3N x 3N)
+        natoms = len(syms)
+        inds = np.arange(natoms, dtype=np.int32)
+        hess = MMFF.getHessian3Nx3N(inds, dx=1e-4)
+        hess = 0.5 * (hess + hess.T)  # Symmetrize
+        
+        # Save Hessian (in eV/Ang^2 as returned by MMFF - FireCore uses eV/Ang throughout)
+        np.save(str(hess_path), hess)
+        print(f"  [hess] Saved Hessian to {hess_path}")
+        
+        # Diagonalize mass-weighted Hessian
+        masses = np.array([atomic_masses[atomic_numbers[s]] for s in syms])  # amu
+        masses_3n = np.repeat(masses, 3)
+        
+        # H_mw = H / sqrt(m_i * m_j)  ->  D = H_mw / m in some conventions
+        # Standard: D_ab,ij = H_ab,ij / sqrt(m_a * m_b)
+        H_mw = hess / np.sqrt(np.outer(masses_3n, masses_3n))
+        
+        # Eigenvalues and eigenvectors
+        eigvals, eigvecs = np.linalg.eigh(H_mw)
+        
+        # Convert to frequencies: omega = sqrt(eigval) 
+        # MMFF Hessian is in eV/Ang^2, not Ha/Bohr^2
+        # sqrt(eV/(amu*Ang^2)) -> THz -> cm^-1
+        # FREQ_EV_AMU_ANG2_TO_THZ = 15.633728205761277 from phonon_utils
+        
+        FREQ_EV_AMU_ANG2_TO_THZ = 15.633728205761277
+        THZ_TO_CM = 33.356  # 1 THz = 33.356 cm^-1
+        
+        # sqrt(eV/Ang^2) -> THz -> cm^-1
+        freqs_thz = np.sqrt(np.maximum(eigvals, 0.0)) * FREQ_EV_AMU_ANG2_TO_THZ
+        freqs_cm = freqs_thz * THZ_TO_CM
+        
+        # Filter: keep only real positive frequencies (above threshold)
+        threshold = 10.0  # cm^-1
+        mask = freqs_cm > threshold
+        freqs_real = freqs_cm[mask]
+        modes_array = eigvecs[:, mask].T  # (n_modes, 3N)
+        
+        # Reshape modes to (n_modes, N, 3)
+        modes = [m.reshape(natoms, 3) for m in modes_array]
+        
+        # Save
+        np.save(str(npy_path), freqs_real)
+        np.save(str(modes_path), np.array(modes, dtype=object))
+        print(f"  [vib] {len(freqs_real)} vibrational modes saved to {npy_path}")
+        print(f"  [vib] Frequency range: {freqs_real.min():.1f} - {freqs_real.max():.1f} cm^-1")
+        
+        return freqs_real, hess, modes, method_tag
+        
+    finally:
+        if tmp_xyz and os.path.exists(tmp_xyz):
+            os.remove(tmp_xyz)
+
+
+class MMFFCalc:
+    """ASE calculator wrapper for FireCore MMFF (for geometry optimization only)."""
+
+    def __init__(self, firecore_path=None, enable_angles=True, scale_bond=None, scale_angle=None, scale_ch=None, scale_cc=None, use_uff=False):
+        self.firecore_path = firecore_path or os.environ.get('FIRECORE_PATH', '/home/prokop/git/FireCore')
+        self.enable_angles = enable_angles
+        self.scale_bond = scale_bond
+        self.scale_angle = scale_angle
+        self.scale_ch = scale_ch
+        self.scale_cc = scale_cc
+        self.use_uff = use_uff
+        self.results = {}
+    
+    def get_potential_energy(self, atoms, **kwargs):
+        self.calculate(atoms)
+        return self.results['energy']
+    
+    def get_forces(self, atoms, **kwargs):
+        self.calculate(atoms)
+        return self.results['forces']
+    
+    def calculate(self, atoms):
+        import sys
+        import tempfile
+        sys.path.insert(0, self.firecore_path)
+        from pyBall import MMFF
+        
+        syms = atoms.get_chemical_symbols()
+        pos = atoms.get_positions()
+        
+        tmp_xyz = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.xyz', delete=False) as f:
+                tmp_xyz = f.name
+                f.write(f"{len(syms)}\n")
+                f.write("MMFF\n")
+                for s, p in zip(syms, pos):
+                    f.write(f"{s}  {p[0]:.8f}  {p[1]:.8f}  {p[2]:.8f}\n")
+            
+            data_dir = os.path.join(self.firecore_path, "cpp/common_resources")
+            dp = {
+                "ElementTypes": os.path.join(data_dir, "ElementTypes.dat"),
+                "AtomTypes": os.path.join(data_dir, "AtomTypes.dat"),
+                "BondTypes": os.path.join(data_dir, "BondTypes.dat"),
+                "AngleTypes": os.path.join(data_dir, "AngleTypes.dat"),
+                "DihedralTypes": os.path.join(data_dir, "DihedralTypes.dat"),
+            }
+            
+            switches = {"MMFF": 1, "NonBonded": -1, "Angles": 0, "PiSigma": 0, "PiPiI": 0}
+            if self.enable_angles:
+                switches["Angles"] = 1
+            MMFF.setSwitches(**switches)
+
+            MMFF.init(xyz_name=tmp_xyz, nPBC=(0, 0, 0), bEpairs=False, bMMFF=True, bUFF=self.use_uff,
+                      sElementTypes=dp["ElementTypes"], sAtomTypes=dp["AtomTypes"],
+                      sBondTypes=dp["BondTypes"], sAngleTypes=dp["AngleTypes"],
+                      sDihedralTypes=dp["DihedralTypes"])
+
+            # Call eval() first to populate buffers (especially for UFF)
+            MMFF.eval()
+
+            # Scale bonds/angles via buffer modification
+            if self.scale_bond or self.scale_angle or (self.scale_ch is not None) or (self.scale_cc is not None):
+                MMFF.getBuffs()
+
+                if (self.scale_ch is not None) or (self.scale_cc is not None):
+                    sch = 1.0 if (self.scale_ch is None) else float(self.scale_ch)
+                    scc = 1.0 if (self.scale_cc is None) else float(self.scale_cc)
+                    neighs = MMFF.neighs
+                    nnode  = int(MMFF.nnode)
+                    valid  = neighs >= 0
+                    is_cc  = valid & (neighs < nnode)
+                    is_ch  = valid & (neighs >= nnode)
+                    bKs0 = np.array(MMFF.bKs, dtype=float)
+                    MMFF.bKs[:] = bKs0
+                    MMFF.bKs[is_cc] = bKs0[is_cc] * scc
+                    MMFF.bKs[is_ch] = bKs0[is_ch] * sch
+                    MMFF.eval()  # Re-evaluate after scaling
+                elif self.scale_bond:
+                    bmask = MMFF.bKs != 0
+                    MMFF.bKs[bmask] *= float(self.scale_bond)
+                    MMFF.eval()  # Re-evaluate after scaling
+
+                if self.scale_angle:
+                    MMFF.apars[:, 1] *= float(self.scale_angle)
+                    MMFF.eval()  # Re-evaluate after scaling
+
+            MMFF.getBuffs()
+            
+            # Access energy and forces from MMFF buffers
+            self.results['energy'] = float(MMFF.Es[0])
+
+            # Reorder forces from internal (nodes+caps) order back to input ASE order
+            apos_int = np.array(MMFF.apos, dtype=float)
+            D = np.linalg.norm(apos_int[:, None, :] - pos[None, :, :], axis=2)
+            perm_int2in = np.argmin(D, axis=1).astype(np.int32)
+            if len(set(perm_int2in.tolist())) != len(syms):
+                raise RuntimeError('MMFFCalc: internal->input atom mapping is not unique')
+            if np.max(np.min(D, axis=1)) > 1e-6:
+                raise RuntimeError('MMFFCalc: internal atom positions do not match input positions')
+
+            forces_int = -np.array(MMFF.fapos, dtype=float).reshape(-1, 3)  # gradient -> force
+            forces_out = np.zeros((len(syms), 3), dtype=float)
+            forces_out[perm_int2in] = forces_int
+            self.results['forces'] = forces_out
+            
+        finally:
+            if tmp_xyz and os.path.exists(tmp_xyz):
+                os.remove(tmp_xyz)
 
 
 # ============================================================

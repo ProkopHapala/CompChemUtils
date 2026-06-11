@@ -23,7 +23,7 @@ from vib_store import (
     load_method, method_dir,
 )
 from vib_utils import (
-    run_dftb_with_hessian, run_pyscf_with_hessian, export_all_results,
+    run_dftb_with_hessian, run_pyscf_with_hessian, run_mmff_with_hessian, export_all_results,
     filter_real_freqs, plot_hessians, relaxed_xyz_path,
 )
 from vib_plot import plot_overlay
@@ -55,15 +55,18 @@ METHODS = {
     'dftb_matsci': lambda mol, atoms, wd: run_dftb_with_hessian(mol, atoms, sk_set='matsci-0-3', workdir=wd),
     'dftb_pbc': lambda mol, atoms, wd: run_dftb_with_hessian(mol, atoms, sk_set='pbc-0-3', workdir=wd),
     'pyscf_b3lyp': lambda mol, atoms, wd: run_pyscf_with_hessian(mol, atoms, method='b3lyp', basis='cc-pVDZ', workdir=wd),
+    'mmff': lambda mol, atoms, wd: run_mmff_with_hessian(mol, atoms, workdir=wd, enable_angles=True),
+    'mmff_bonds': lambda mol, atoms, wd: run_mmff_with_hessian(mol, atoms, workdir=wd, enable_angles=False),
+    'mmff_uff': lambda mol, atoms, wd: run_mmff_with_hessian(mol, atoms, workdir=wd, enable_angles=True, use_uff=True),
 }
 
 DEFAULT_METHODS = {
-    'CH4': ['pyscf_b3lyp', 'dftb_mio', 'dftb_3ob'],
-    'C2H6': ['pyscf_b3lyp', 'dftb_mio', 'dftb_3ob'],
-    'SiH4': ['pyscf_b3lyp', 'dftb_matsci', 'dftb_pbc'],
-    'Si2H6': ['pyscf_b3lyp', 'dftb_matsci', 'dftb_pbc'],
-    'adamantane': ['pyscf_b3lyp', 'dftb_mio', 'dftb_3ob'],
-    'Si10_H': ['pyscf_b3lyp', 'dftb_matsci', 'dftb_pbc'],
+    'CH4': ['pyscf_b3lyp', 'dftb_mio', 'dftb_3ob', 'mmff'],
+    'C2H6': ['pyscf_b3lyp', 'dftb_mio', 'dftb_3ob', 'mmff'],
+    'SiH4': ['pyscf_b3lyp', 'dftb_matsci', 'dftb_pbc', 'mmff'],
+    'Si2H6': ['pyscf_b3lyp', 'dftb_matsci', 'dftb_pbc', 'mmff'],
+    'adamantane': ['dftb_mio', 'dftb_3ob', 'mmff'],  # pyscf too slow for adamantane
+    'Si10_H': ['pyscf_b3lyp', 'dftb_matsci', 'dftb_pbc', 'mmff'],
 }
 
 DEFAULT_REF = 'pyscf_b3lyp_cc-pVDZ'
@@ -181,7 +184,8 @@ def main():
     p_run = sub.add_parser('run', help='Compute vibrations')
     _add_workdir(p_run)
     p_run.add_argument('molecule', choices=list(MOLECULES.keys()))
-    p_run.add_argument('--methods', nargs='+', choices=list(METHODS.keys()))
+    p_run.add_argument('--methods', nargs='+', choices=list(METHODS.keys()),
+                       help='Methods to run: pyscf_b3lyp, dftb_mio, dftb_3ob, mmff, mmff_bonds')
     p_run.add_argument('--plot', action='store_true')
     p_run.add_argument('--plot-hessians', action='store_true')
     p_run.set_defaults(func=cmd_run)

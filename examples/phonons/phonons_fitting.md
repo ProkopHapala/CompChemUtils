@@ -266,3 +266,91 @@ python run_phonon.py --structure diamond_primitive --method mmff \
 ```
 
 This implementation enables the **Step 1 (bond-only)** and **Step 2 (bond+angle)** hierarchical fitting workflow described above, with the ability to systematically test which force field terms are necessary for a given material.
+
+---
+
+## 2D Grid Search Implementation (June 2026)
+
+### Efficient Parameter Space Exploration
+
+To systematically explore the bond and angle stiffness parameter space, a 2D grid search was implemented that minimizes RMSE between MMFF and DFT phonon spectra across the full q-point path and all bands.
+
+**Key Implementation Features:**
+
+| Component | Description |
+|-----------|-------------|
+| `MMFFPhononSession` | Reusable MMFF initialization with in-place buffer scaling |
+| `grid_fit_mmff_phonon.py` | 2D grid search script with RMSE computation |
+| Quiet mode | Suppresses native MMFF output during scans |
+| No reinitialization | MMFF initialized once, parameters modified in-place |
+
+**Algorithm:**
+1. Load DFT reference spectra from `.npz`
+2. Initialize `MMFFPhononSession` once on supercell
+3. Loop over bond and angle scaling grid (e.g., bond [1.0, 1.8], angle [0.8, 1.2])
+4. For each parameter pair:
+   - Scale bond (`bKs`) and angle (`apars`) buffers in-place via numpy
+   - Compute Phi blocks via `getPhononPhiBlocks`
+   - Solve phonon bands using unified solver
+   - Compute RMSE against DFT reference (point-by-point, band-by-band)
+5. Store RMSE matrix and best-fit spectra in memory
+6. Generate 2D heatmap PNG and interactive HTML comparison
+
+**RMSE Metric:**
+```python
+rmse = np.sqrt(np.mean((f_mmff - f_dftb)**2))
+```
+Computed over all q-points and all 6 bands (sorted by frequency at each q-point).
+
+### Diamond Results (3×3×3 supercell, bond [1.0, 1.8], angle [0.8, 1.2])
+
+| Grid | Best RMSE (THz) | Best scale_bond | Best scale_angle |
+|------|-----------------|-----------------|------------------|
+| 10×10 | 2.412 | 1.622 | 0.933 |
+
+**Interpretation:**
+- Bonds need significant stiffening (~1.62×) to match DFT
+- Angles need slight softening (~0.93×)
+- Default MMFF (scale=1.0) gives RMSE ~3.1 THz
+- Best fit reduces error by ~22%
+
+**Physical Insight:**
+The optimal bond scaling (1.62×) is higher than the analytical estimate from Γ-point optical mode alone (~1.33×). This suggests that fitting the full dispersion (including acoustic branches and zone-boundary behavior) requires different parameters than matching a single high-symmetry point.
+
+### Usage
+
+```bash
+cd /home/prokop/git/CompChemUtils/examples/phonons
+unset LD_PRELOAD ASAN_OPTIONS
+python grid_fit_mmff_phonon.py \
+  --structure diamond_primitive \
+  --reference test_primitive/diamond_primitive_dftb_3x3x3/phonon_bands.npz \
+  --q-path-file plots/diamond_qpath_280.dat \
+  --supercell 3 3 3 \
+  --bond-range 1.0 1.8 \
+  --angle-range 0.8 1.2 \
+  --grid-size 10 \
+  --outdir fit_grid_bond_1.0_1.8 \
+  --quiet
+```
+
+**CLI Arguments:**
+- `--bond-range`: min max for bond stiffness scaling
+- `--angle-range`: min max for angle stiffness scaling
+- `--grid-size`: number of points per dimension (N×N grid)
+- `--quiet`: suppress native MMFF output during scans
+- `--force-recompute`: ignore cached Phi blocks
+
+### Integration with Hierarchical Fitting Strategy
+
+This grid search implements the **Phase 1 (Global Search)** recommended in the DeepSeek protocol:
+- Uses 2D grid over bond and angle parameters
+- RMSE metric serves as the cost function
+- Efficient enough for 100+ evaluations (10×10 grid)
+- Provides best-fit parameters as warm start for Phase 2 (local refinement)
+
+**Next Steps:**
+- Use grid search results as initial guess for greedy stochastic descent
+- Implement eigenvector-aligned band-by-band matching for refinement
+- Add cumulative DOS constraint for thermodynamic property validation
+- Perform sensitivity analysis on final parameters

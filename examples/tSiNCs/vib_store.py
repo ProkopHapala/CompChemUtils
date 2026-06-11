@@ -214,12 +214,18 @@ def load_method(mol_name, method_tag, workdir='.', threshold=10.0):
     if not xyz_path.exists():
         xyz_path = _flat_path(workdir, mol_name, method_tag, '_relaxed.xyz')
     atoms = read(str(xyz_path)) if xyz_path.exists() else None
-    if hessian is not None and atoms is not None:
+    # Prefer modes.npy if available and matches freqs length
+    modes_path = modes_npy_path(mol_name, method_tag, workdir)
+    if modes_path.exists():
+        all_modes = list(np.load(str(modes_path), allow_pickle=True))
+        if len(all_modes) == len(freqs):
+            pass  # Use modes.npy
+        elif hessian is not None and atoms is not None:
+            all_modes = modes_from_hessian(mol_name, method_tag, workdir, atoms, hessian, freqs)
+        else:
+            raise ValueError(f'modes.npy ({len(all_modes)}) and freqs ({len(freqs)}) mismatch — re-export from Hessian')
+    elif hessian is not None and atoms is not None:
         all_modes = modes_from_hessian(mol_name, method_tag, workdir, atoms, hessian, freqs)
-    elif modes_npy_path(mol_name, method_tag, workdir).exists():
-        all_modes = list(np.load(str(modes_npy_path(mol_name, method_tag, workdir))))
-        if len(all_modes) != len(freqs):
-            raise FileNotFoundError(f'Cannot rebuild full modes for {mol_name}/{method_tag}; missing Hessian')
     else:
         raise FileNotFoundError(f'No Hessian or modes.npy for {mol_name}/{method_tag}')
     mode_freqs, vib_modes = select_real_modes(freqs, all_modes, threshold=threshold)
