@@ -230,6 +230,35 @@ def findBondsNP( apos, atypes=None, Rcut=3.0, RvdwCut=0.5, RvdWs=None, byRvdW=Tr
     #print( "rbs=",   len(rbs),   rbs )
     return np.array( bonds, dtype=np.int32 ), np.array( rbs )
 
+def findShortContactsNP( apos, atypes, factor=0.7, Rcov=None ):
+    apos = np.array(apos, dtype=float)
+    n = len(apos)
+    if n < 2:
+        return []
+    if Rcov is None:
+        if len(atypes) != n:
+            raise ValueError(f"findShortContactsNP(): len(atypes)={len(atypes)} != n={n}")
+        if isinstance(atypes[0], str):
+            ii = [ elements.ELEMENT_DICT[e][0] for e in atypes ]
+        else:
+            ii = atypes
+        Rcov = np.array( getAtomRadius( ii, eparams=elements.ELEMENTS, icol=6 ), dtype=float )
+    else:
+        Rcov = np.array(Rcov, dtype=float)
+        if len(Rcov) != n:
+            raise ValueError(f"findShortContactsNP(): len(Rcov)={len(Rcov)} != n={n}")
+    out = []
+    for i in range(n):
+        pi = apos[i]
+        for j in range(i+1, n):
+            d  = apos[j] - pi
+            r2 = d[0]*d[0] + d[1]*d[1] + d[2]*d[2]
+            r  = np.sqrt(r2)
+            rmin = (Rcov[i] + Rcov[j]) * float(factor)
+            if r < rmin:
+                out.append( (i, j, r, rmin) )
+    return out
+
 def findHBondsNP( apos, atypes=None, Rb=1.5, Rh=2.5, angMax=60.0, typs1={"H"}, typs2=neg_types_set, bPrint=False, bHbase=False ):
     bonds  = []
     rbs    = []
