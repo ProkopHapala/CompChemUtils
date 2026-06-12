@@ -28,7 +28,7 @@ def read_xyz(fname):
     return '; '.join(atoms)
 
 
-def run_sp(mol_geom, basis, xc_func, charge, spin):
+def run_sp(mol_geom, basis, xc_func, charge, spin, ecp=None):
     """Run a single-point DFT calculation at fixed geometry.
 
     Parameters
@@ -43,12 +43,14 @@ def run_sp(mol_geom, basis, xc_func, charge, spin):
         Molecular charge.
     spin : int
         Spin multiplicity (0 for singlet, 1 for doublet, ...).
+    ecp : str or dict, optional
+        ECP/pseudopotential specification (e.g. 'def2-SVP' for Ag).
 
     Returns
     -------
     mol, mf : (Mole, RKS/UKS)
     """
-    mol = gto.Mole(atom=mol_geom, basis=basis, charge=charge, spin=spin, unit='Angstrom')
+    mol = gto.Mole(atom=mol_geom, basis=basis, charge=charge, spin=spin, unit='Angstrom', ecp=ecp)
     mol.build()
     mf = dft.RKS(mol) if spin == 0 else dft.UKS(mol)
     mf.xc = xc_func
@@ -189,7 +191,7 @@ def write_mulliken_table(fname, labels, fA_plus, fA_minus, fA_0):
 
 
 def run_fukui_for_molecule(name, geom_str, outdir, basis='def2-svp', xc_func='b3lyp',
-                           resolution=0.15, margin=4.0):
+                           resolution=0.15, margin=4.0, spin_N=0, spin_A=1, spin_C=1, ecp=None):
     """Full Fukui workflow for a single molecule.
 
     Parameters
@@ -204,6 +206,10 @@ def run_fukui_for_molecule(name, geom_str, outdir, basis='def2-svp', xc_func='b3
         DFT settings.
     resolution, margin : float
         Cube grid parameters.
+    spin_N, spin_A, spin_C : int
+        Spin multiplicity for neutral, anion, cation (default: 0, 1, 1).
+    ecp : str or dict, optional
+        ECP/pseudopotential specification.
 
     Returns
     -------
@@ -219,15 +225,15 @@ def run_fukui_for_molecule(name, geom_str, outdir, basis='def2-svp', xc_func='b3
 
     # ---- Run SCF for N, N+1, N-1 ---------------------------------------
     print("  Neutral  (N)  ...")
-    mol_N, mf_N = run_sp(geom_str, basis, xc_func, charge=0, spin=0)
+    mol_N, mf_N = run_sp(geom_str, basis, xc_func, charge=0, spin=spin_N, ecp=ecp)
     print(f"    E_N  = {mf_N.e_tot:.6f} Ha")
 
     print("  Anion    (N+1) ...")
-    mol_A, mf_A = run_sp(geom_str, basis, xc_func, charge=-1, spin=1)
+    mol_A, mf_A = run_sp(geom_str, basis, xc_func, charge=-1, spin=spin_A, ecp=ecp)
     print(f"    E_A  = {mf_A.e_tot:.6f} Ha")
 
     print("  Cation   (N-1) ...")
-    mol_C, mf_C = run_sp(geom_str, basis, xc_func, charge=1, spin=1)
+    mol_C, mf_C = run_sp(geom_str, basis, xc_func, charge=1, spin=spin_C, ecp=ecp)
     print(f"    E_C  = {mf_C.e_tot:.6f} Ha")
 
     # ---- Write cube files ----------------------------------------------
