@@ -1,0 +1,45 @@
+# ==================================================================
+#  CompChemUtils — machine-specific configuration
+# ==================================================================
+#  COPY this file to machine_config.yaml (same directory) and fill
+#  in your local paths.  machine_config.yaml is git-ignored.
+#
+#  Paths support ~ (home) and $VAR (environment variables).
+# ==================================================================
+
+# ---- External executables (bare name = search PATH) ----
+tools:
+  xtb_bin: xtb              # GFN1/2-xTB, GFN-FF
+  g_xtb_bin: xtb-gxtb       # g-xTB (transition-metal optimised)
+  dftb_bin: dftb+           # DFTB+ SCC-DFTB
+  lammps_bin: lmp_serial    # LAMMPS MD engine
+  gpaw_command: python -m gpaw
+  phonopy_bin: phonopy
+
+# ---- DFTB+ Slater–Koster files ----
+# All .skf sets (auorg, mio, 3ob, hyb, agch-clust, …) are expected
+# to live in ONE directory.  DFTB+ uses Prefix + "-" + Suffix to
+# locate the files, so mixing multiple sets in a single folder is fine
+# as long as file names do not collide.
+sk_dir: /path/to/all_dftb_slakos
+
+# ---- Large external data directories ----
+data_dirs:
+  phonondb_dir: /path/to/phononDB_repo
+  lammps_potentials: /path/to/lammps/potentials
+  mmff_data_dir: /path/to/FireCore/cpp/common_resources
+
+# ---- Default PBS / cluster settings ----
+cluster:
+  default_queue: gpu
+  default_walltime_h: 12.0
+  default_modules:
+    - python/3.10
+    - gcc/11
+
+# ---- Default parameters for QC backends ----
+qc_defaults:
+  dftb_temperature_K: 300.0
+  dftb_maxiter: 250
+  xtb_threads: 4
+  gpaw_ecut_eV: 300.0
