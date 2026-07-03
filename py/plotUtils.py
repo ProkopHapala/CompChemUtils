@@ -470,7 +470,7 @@ def plotAngles( iangs, angs, ps, axes=(0,1), colors='k', labels=None, bPoly=True
         ax.annotate( "%3.0f˚" %(angs[i]*180.0/np.pi), p[ax_inds], color=colors[i] )
 
 
-def plotGeometry(apos, atypes, lvs=None, bond_dist=1.8, bBondLabels=True,  replicate=(1,1,0), axes=(0,1), title=None, fname=None, figsize=(8,6),  bDrawBox=False):
+def plotGeometry(apos, atypes, lvs=None, bond_dist=1.8, bBondLabels=True,  replicate=(1,1,0), axes=(0,1), title=None, fname=None, figsize=(8,6),  bDrawBox=False, ax=None, bAtomNumLabels=False, bBlackLabels=False, bNoEdge=False):
     """Plot atomic geometry with bonds and bond length labels.
     
     Args:
@@ -485,8 +485,13 @@ def plotGeometry(apos, atypes, lvs=None, bond_dist=1.8, bBondLabels=True,  repli
         fname: output filename (if None, display but don't save)
         figsize: figure size
         bDrawBox: whether to draw unit cell outline
+        ax: existing matplotlib Axes (if None, creates new figure)
+        bAtomNumLabels: show atom index (0-based) instead of element symbol
+        bBlackLabels: black text with white stroke outline
+        bNoEdge: remove black rims from atom scatter points
     """
     import matplotlib.pyplot as plt
+    import matplotlib.patheffects as pe
     from itertools import combinations
     
     # Convert atomic numbers to symbols if needed
@@ -525,14 +530,25 @@ def plotGeometry(apos, atypes, lvs=None, bond_dist=1.8, bBondLabels=True,  repli
         apos_rep = apos
     
     # Plot atoms
-    fig, ax = plt.subplots(figsize=figsize)
+    b_own_fig = ax is None
+    if b_own_fig:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
     
-    for ename, pos in zip(enames_rep, apos_rep):
+    for iatm, (ename, pos) in enumerate(zip(enames_rep, apos_rep)):
         color = elem_colors.get(ename, 'green')
         size = elem_sizes.get(ename, 50)
-        ax.scatter(pos[axes[0]], pos[axes[1]], c=color, s=size, edgecolors='black', zorder=10)
-        ax.text(pos[axes[0]], pos[axes[1]], ename, color='white', ha='center', va='center', 
-                fontsize=8, zorder=11)
+        ec = 'none' if bNoEdge else 'black'
+        ax.scatter(pos[axes[0]], pos[axes[1]], c=color, s=size, edgecolors=ec, zorder=10)
+        lbl = str(iatm) if bAtomNumLabels else ename
+        if bBlackLabels:
+            ax.text(pos[axes[0]], pos[axes[1]], lbl, color='black', fontsize=7,
+                    ha='center', va='center', fontweight='bold',
+                    path_effects=[pe.withStroke(linewidth=2, foreground='white')], zorder=11)
+        else:
+            ax.text(pos[axes[0]], pos[axes[1]], lbl, color='white', ha='center', va='center',
+                    fontsize=8, zorder=11)
     
     # Detect bonds: ALL images within cutoff (not just best one)
     bonds = []  # list of (i, j, shift_j, dist) where shift_j is the periodic shift applied to atom j
@@ -609,11 +625,12 @@ def plotGeometry(apos, atypes, lvs=None, bond_dist=1.8, bBondLabels=True,  repli
     ax.set_ylabel(f"{['x','y','z'][axes[1]]} (Å)")
     ax.grid(True, alpha=0.3)
     
-    if fname:
-        plt.savefig(fname, dpi=150, bbox_inches='tight')
-        plt.close()
-    else:
-        plt.show()
+    if b_own_fig:
+        if fname:
+            plt.savefig(fname, dpi=150, bbox_inches='tight')
+            plt.close()
+        else:
+            plt.show()
 
 def plotGeometryWithForces(apos, atypes, lvs=None, forces=None, fixed_idx=None, highlight=None, scan_path=None, bond_dist=2.0, axes=(0,1), title=None, fname=None, figsize=(12,10), dpi=120):
     ax1, ax2 = axes

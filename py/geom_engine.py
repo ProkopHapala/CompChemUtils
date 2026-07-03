@@ -2,10 +2,49 @@
 
 import os
 import json
+from dataclasses import dataclass, field
+from typing import List, Optional
 import numpy as np
 
 from . import atomicUtils as au
 from .AtomicSystem import AtomicSystem
+
+
+# ============================================================= #
+#  Geometric Constraints — program-agnostic specification        #
+#  Each backend translates these to its own constraint syntax.   #
+# ============================================================= #
+
+@dataclass
+class GeomConstraint:
+    """Program-agnostic geometric constraint.
+
+    type:   'freeze_atoms'  — fix Cartesian positions of listed atoms
+            'fix_distance'  — fix bond length between atoms[0] and atoms[1]
+            'fix_angle'     — fix angle atoms[0]-atoms[1]-atoms[2]
+            'fix_dihedral'  — fix dihedral atoms[0]-atoms[1]-atoms[2]-atoms[3]
+    atoms:  list of 0-based atom indices
+    value:  target value (Å for distance, degrees for angle/dihedral); None for freeze
+    """
+    type: str
+    atoms: List[int]
+    value: Optional[float] = None
+
+def freeze_atoms(indices: List[int]) -> GeomConstraint:
+    """Fix Cartesian positions of specified atoms."""
+    return GeomConstraint(type='freeze_atoms', atoms=list(indices), value=None)
+
+def fix_distance(i: int, j: int, d_angstrom: float) -> GeomConstraint:
+    """Fix bond length between atoms i and j (Å)."""
+    return GeomConstraint(type='fix_distance', atoms=[i, j], value=float(d_angstrom))
+
+def fix_angle(i: int, j: int, k: int, deg: float) -> GeomConstraint:
+    """Fix bond angle i-j-k (degrees)."""
+    return GeomConstraint(type='fix_angle', atoms=[i, j, k], value=float(deg))
+
+def fix_dihedral(i: int, j: int, k: int, l: int, deg: float) -> GeomConstraint:
+    """Fix dihedral angle i-j-k-l (degrees)."""
+    return GeomConstraint(type='fix_dihedral', atoms=[i, j, k, l], value=float(deg))
 
 
 def _normalize(v):
@@ -26,7 +65,11 @@ def _resolve_point(apos, spec, _0=0):
     """
     if isinstance(spec, (int, np.integer)):
         return np.array(apos[int(spec) - _0], dtype=np.float64)
-    if isinstance(spec, (list, tuple, np.ndarray)) and (len(spec) > 0) and isinstance(spec[0], (int, np.integer)):
+    if isinstance(spec, np.ndarray) and spec.dtype.kind == 'f' and spec.shape == (3,):
+        return spec.astype(np.float64)   # explicit 3D coordinate
+    if isinstance(spec, (list, tuple)) and len(spec) == 3 and isinstance(spec[0], float):
+        return np.array(spec, dtype=np.float64)  # explicit 3D coordinate
+    if isinstance(spec, (list, tuple, np.ndarray)) and (len(spec) > 0) and isinstance(spec[0] if not isinstance(spec, np.ndarray) else spec.flat[0], (int, np.integer)):
         ii = np.array(spec, dtype=int) - _0
         return np.array(apos[ii].mean(axis=0), dtype=np.float64)
     if isinstance(spec, dict):
@@ -826,3 +869,86 @@ def run_from_json(config_path):
         remove_epairs=remove_epairs,
         plot_dirs_png=plot_dirs_png,
     )
+
+
+# ============================================================= #
+#  Geometry sanity validation — crash loudly on garbage         #
+# ============================================================= #
+
+def validate_geometry(geom, ref_geom=None,
+                      max_bond_length=5.0, min_bond_length=0.3,
+                      max_atom_displacement=None, min_atom_distance=0.05,
+                      check_nan=True, check_bonds=True, check_overlap=True):
+    """Validate geometry for physical reasonableness.
+
+    Raises ValueError with a clear message on any check failure.
+    Returns True if all checks pass.
+
+    Parameters
+    ----------
+    geom                  : AtomicSystem or (apos, es) tuple
+    ref_geom              : reference geometry for displacement check
+    max_bond_length       : longest allowed bond (Å); None = skip
+    min_bond_length       : shortest allowed bond (Å); None = skip
+    max_atom_displacement : max allowed displacement vs ref_geom (Å); None = skip
+    min_atom_distance     : minimum distance between any two atoms (Å);
+                            values < 0.05 Å indicate overlap/crash
+    check_nan             : fail if any coordinate is NaN or Inf
+    check_bonds           : run bond-length sanity using covalent radii
+    check_overlap         : run pairwise distance check for near-coincident atoms
+    """
+    import numpy as np
+    from . import elements as el
+
+    apos = geom.apos if hasattr(geom, 'apos') else geom[0]
+    es   = geom.enames if hasattr(geom, 'enames') else geom[1]
+    apos = np.asarray(apos, dtype=np.float64)
+    if apos.ndim != 2 or apos.shape[1] != 3:
+        raise ValueError(f"validate_geometry: apos must be (N,3), got {apos.shape}")
+    n = len(apos)
+    if len(es) != n:
+        raise ValueError(f"validate_geometry: len(es)={len(es)} != len(apos)={n}")
+
+    # --- 1. NaN / Inf ---
+    if check_nan:
+        if not np.all(np.isfinite(apos)):
+            bad = np.argwhere(~np.isfinite(apos))
+            msg = "; ".join(f"atom {i}({es[i]}) axis {j}" for i, j in bad)
+            raise ValueError(f"Geometry contains NaN/Inf: {msg}")
+
+    # --- 2. Pairwise overlap ---
+    if check_overlap and min_atom_distance is not None:
+        for i in range(n):
+            for j in range(i + 1, n):
+                d = np.linalg.norm(apos[i] - apos[j])
+                if d < min_atom_distance:
+                    raise ValueError( f"Atoms {i}({es[i]}) and {j}({es[j]}) are nearly coincident (d={d:.4f} Å, limit={min_atom_distance} Å)" )
+
+    # --- 3. Bond-length sanity using covalent radii ---
+    if check_bonds and (max_bond_length is not None or min_bond_length is not None):
+        # Build covalent-radius lookup from ELEMENTS table (index_Rcov = 6)
+        rcov_map = {row[el.index_symbol]: row[el.index_Rcov] for row in el.ELEMENTS}
+        radii = [rcov_map.get(e, 1.5) for e in es]
+        for i in range(n):
+            for j in range(i + 1, n):
+                d = np.linalg.norm(apos[i] - apos[j])
+                r_sum = radii[i] + radii[j]
+                if d < r_sum + 0.4:  # consider bonded
+                    if min_bond_length is not None and d < min_bond_length:
+                        raise ValueError( f"Bond {i}({es[i]})–{j}({es[j]}) too short: d={d:.3f} Å < limit={min_bond_length} Å")
+                    if max_bond_length is not None and d > max_bond_length:
+                        raise ValueError( f"Bond {i}({es[i]})–{j}({es[j]}) too long: d={d:.3f} Å > limit={max_bond_length} Å" )
+
+    # --- 4. Displacement vs reference ---
+    if ref_geom is not None and max_atom_displacement is not None:
+        ref_pos = ref_geom.apos if hasattr(ref_geom, 'apos') else ref_geom[0]
+        ref_pos = np.asarray(ref_pos, dtype=np.float64)
+        if ref_pos.shape != apos.shape:
+            raise ValueError( f"validate_geometry: ref_geom shape {ref_pos.shape} != geom shape {apos.shape}"  )
+        displacements = np.linalg.norm(apos - ref_pos, axis=1)
+        max_d = float(np.max(displacements))
+        if max_d > max_atom_displacement:
+            i_max = int(np.argmax(displacements))
+            raise ValueError( f"Atom {i_max}({es[i_max]}) displaced by {max_d:.2f} Å > limit={max_atom_displacement} Å vs reference geometry" )
+
+    return True

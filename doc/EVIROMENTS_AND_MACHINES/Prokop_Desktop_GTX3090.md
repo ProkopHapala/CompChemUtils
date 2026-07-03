@@ -275,6 +275,7 @@ activate_ml
 | py3Dmol | 2.5.5 | Working | `import py3Dmol; view = py3Dmol.view()` (in notebook) |
 | ASH | 0.95 | Working | `from ash import *` (in Python script) |
 | easyxtb | 0.10.2 | Working | `import easyxtb` (Python xTB interface) |
+| GPAW | 25.7.0 | Working | `venvML && gpaw info` (periodic DFT / PAW) |
 
 ---
 

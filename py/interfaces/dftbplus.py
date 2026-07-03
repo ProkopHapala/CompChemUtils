@@ -35,11 +35,19 @@ class DFTBPlusBackend(CalculationBackend):
     def __init__(self, sk_path: Optional[str] = None, method: Optional[str] = None,
                  scc: bool = True, orbital_resolved_scc: bool = False,
                  temperature: float = 300.0, kpts=None, maxiter: int = 250,
-                 opt: bool = False, hamiltonian='DFTB'):
+                 opt: bool = False, hamiltonian=None):
+        self.method = (method or '').strip()
+        # Auto-detect xTB Hamiltonian from method name
+        if hamiltonian is None:
+            if self.method.upper() in ('GFN1-XTB', 'GFN2-XTB'):
+                hamiltonian = 'xTB'
+            else:
+                hamiltonian = 'DFTB'
         if sk_path is not None and not os.path.isdir(sk_path):
             raise FileNotFoundError(f"DFTBPlusBackend: Slater-Koster path not found: {sk_path}")
+        if hamiltonian == 'DFTB' and sk_path is None:
+            raise ValueError("DFTBPlusBackend: sk_path is required for DFTB Hamiltonian")
         self.sk_path = sk_path
-        self.method = (method or '').strip()
         self.scc = scc
         self.orbital_resolved_scc = orbital_resolved_scc
         self.temperature = float(temperature)
@@ -100,10 +108,11 @@ class DFTBPlusBackend(CalculationBackend):
 
     def _make_params(self, es):
         """Build ASE Dftb keyword dictionary from element list."""
+        prefix = self.sk_path if self.sk_path.endswith('/') else self.sk_path + '/'
         p = {
             'Hamiltonian_SCC': 'Yes' if self.scc else 'No',
             'Hamiltonian_MaxAngularMomentum_': '',
-            'Hamiltonian_SlaterKosterFiles_Prefix': self.sk_path,
+            'Hamiltonian_SlaterKosterFiles_Prefix': prefix,
             'Hamiltonian_SlaterKosterFiles_Separator': '"-"',
             'Hamiltonian_SlaterKosterFiles_Suffix': '".skf"',
         }
@@ -126,46 +135,103 @@ class DFTBPlusBackend(CalculationBackend):
 
     # ---- local execution (requires ASE + dftbplus installed)
     def run_energy(self, geom, method=None, basis=None, **kw) -> float:
+        """Single-point energy via subprocess dftb+. Returns energy in eV."""
         self.check('energy')
+        import tempfile, subprocess, shutil, numpy as np
         atoms = self._to_ase(geom)
-        if self.sk_path is None:
-            raise RuntimeError("DFTBPlusBackend: sk_path must be set for local execution")
-        p = self._make_params(atoms.get_chemical_symbols())
-        from ase.calculators.dftb import Dftb
-        calc = Dftb(**p)
-        atoms.calc = calc
-        return float(atoms.get_potential_energy())
+        if self.hamiltonian == 'DFTB' and self.sk_path is None:
+            raise RuntimeError("DFTBPlusBackend: sk_path must be set for DFTB Hamiltonian")
+        wd = tempfile.mkdtemp(prefix='dftb_sp_')
+        try:
+            self._write_hsd(atoms, os.path.join(wd, 'dftb_in.hsd'), driver=None)
+            self._write_gen(atoms, os.path.join(wd, 'geo.gen'))
+            r = subprocess.run(['dftb+'], cwd=wd, capture_output=True, text=True)
+            if r.returncode != 0:
+                raise RuntimeError(f"DFTB+ SP failed:\n{r.stderr[-400:]}")
+            # Parse total energy from detailed.out (line: "Total energy: ... <E_Ha> H <E_eV> eV")
+            det = os.path.join(wd, 'detailed.out')
+            if os.path.exists(det):
+                with open(det) as f:
+                    for line in f:
+                        if 'Total energy:' in line:
+                            return float(line.split()[-2])  # already in eV
+            # Fallback: parse results.tag (Hartree)
+            tag = os.path.join(wd, 'results.tag')
+            if os.path.exists(tag):
+                with open(tag) as f:
+                    lines = f.readlines()
+                for i, l in enumerate(lines):
+                    if 'total_energy' in l:
+                        return float(lines[i+1].strip()) * 27.2114
+            raise RuntimeError("DFTB+ SP: could not parse energy")
+        finally:
+            shutil.rmtree(wd)
 
     def run_relax(self, geom, method=None, basis=None, constraints=None,
-                  fmax=0.05, maxsteps=200, **kw):
+                  fmax=0.05, maxsteps=200, outdir=None, **kw):
         self.check('relax')
-        from ase.optimize import BFGS
+        import tempfile
+        import subprocess
+        import shutil
+        import numpy as np
+
         atoms = self._to_ase(geom)
-        if self.sk_path is None:
-            raise RuntimeError("DFTBPlusBackend: sk_path must be set for local execution")
-        p = self._make_params(atoms.get_chemical_symbols())
-        p['Driver_'] = ''
-        p['Driver_MaxSteps'] = str(maxsteps)
-        p['Driver_MaxForceComponent [eV/AA]'] = str(fmax)
-        from ase.calculators.dftb import Dftb
-        calc = Dftb(**p)
-        atoms.calc = calc
+        if self.hamiltonian == 'DFTB' and self.sk_path is None:
+            raise RuntimeError("DFTBPlusBackend: sk_path must be set for DFTB Hamiltonian")
+
+        # Extract moved_atoms from freeze_atoms constraints (1-based indexing for DFTB+)
+        moved_atoms = None
         if constraints:
-            cstrs = []
             for c in constraints:
                 if c.type == 'freeze_atoms':
-                    from ase.constraints import FixAtoms
-                    cstrs.append(FixAtoms(indices=c.atoms))
-            if cstrs:
-                atoms.set_constraint(cstrs)
-        BFGS(atoms, maxstep=0.2).run(fmax=fmax, steps=maxsteps)
-        apos, es = self._from_ase(atoms)
-        if hasattr(geom, 'apos'):
-            from ..AtomicSystem import AtomicSystem
-            out = AtomicSystem(); out.apos = apos; out.enames = es
-            out.lvec = atoms.cell.array if atoms.cell.rank > 0 else None
-            return out
-        return (apos, es)
+                    # DFTB+ MovedAtoms specifies which atoms CAN move
+                    all_indices = set(range(len(atoms)))
+                    frozen = set(c.atoms)
+                    moved = sorted(all_indices - frozen)
+                    if moved:
+                        moved_atoms = [i + 1 for i in moved]  # 1-based for DFTB+
+                    break
+
+        # Use persistent output directory if provided, otherwise temp
+        if outdir is None:
+            wd = tempfile.mkdtemp(prefix='dftb_relax_')
+            cleanup = True
+        else:
+            os.makedirs(outdir, exist_ok=True)
+            wd = outdir
+            cleanup = False
+        try:
+            # Write dftb_in.hsd with Optimize driver
+            hsd_path = os.path.join(wd, 'dftb_in.hsd')
+            self._write_hsd(atoms, hsd_path, driver='Optimize',
+                           moved_atoms=moved_atoms, max_steps=maxsteps,
+                           max_force_component=fmax)
+
+            # Write geo.gen
+            gen_path = os.path.join(wd, 'geo.gen')
+            self._write_gen(atoms, gen_path)
+
+            # Run DFTB+
+            result = subprocess.run(['dftb+'], cwd=wd, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"DFTB+ stderr:\n{result.stderr}")
+                raise RuntimeError(f"DFTB+ failed with code {result.returncode}")
+
+            # Read optimized geometry from geo_end.gen
+            if os.path.exists(os.path.join(wd, 'geo_end.gen')):
+                apos_out, es_out = self._read_gen(os.path.join(wd, 'geo_end.gen'))
+            else:
+                raise FileNotFoundError("DFTB+ did not produce geo_end.gen")
+
+            if hasattr(geom, 'apos'):
+                from ..AtomicSystem import AtomicSystem
+                out = AtomicSystem(); out.apos = apos_out; out.enames = list(es_out)
+                out.lvec = atoms.cell.array if atoms.cell.rank > 0 else None
+                return out
+            return (apos_out, list(es_out))
+        finally:
+            if cleanup:
+                shutil.rmtree(wd)
 
     def run_vibrations(self, geom, method=None, basis=None, **kw):
         self.check('vibrations')
@@ -210,45 +276,134 @@ class DFTBPlusBackend(CalculationBackend):
         n3 = n_atoms * 3
         return raw.reshape(n3, n3)
 
+    def _write_gen(self, atoms, fname):
+        """Write DFTB+ GenFormat geometry file."""
+        es = atoms.get_chemical_symbols()
+        apos = atoms.positions
+        unique_es = sorted(set(es))
+        elem_map = {e: i+1 for i, e in enumerate(unique_es)}
+        with open(fname, 'w') as f:
+            f.write(f"{len(es)}  C\n")
+            f.write(" ".join(unique_es) + "\n")
+            for i, (e, pos) in enumerate(zip(es, apos)):
+                f.write(f"{elem_map[e]}  {pos[0]:.15f}  {pos[1]:.15f}  {pos[2]:.15f}\n")
+
+    def _read_gen(self, fname):
+        """Read DFTB+ GenFormat geometry file.
+
+        Format:
+        Line 1: natoms coord_type
+        Line 2: unique_elements (space-separated)
+        Lines 3+: atom_number element_index x y z
+
+        Note: atom_number is sequential (1-based), element_index is index into unique_elements list (1-based).
+        """
+        import numpy as np
+        with open(fname) as f:
+            lines = f.readlines()
+        parts = lines[0].strip().split()
+        natoms = int(parts[0])
+        # Element names on second line (may have leading spaces)
+        unique_es = lines[1].strip().split()
+        apos = []
+        es = []
+        for i, line in enumerate(lines[2:2+natoms]):
+            parts = line.strip().split()
+            # First column is atom number (ignore), second is element index (1-based)
+            elem_idx = int(parts[1]) - 1  # convert to 0-based
+            if elem_idx < len(unique_es):
+                es.append(unique_es[elem_idx])
+            else:
+                raise ValueError(f"Element index {elem_idx} (0-based) out of range for unique_es={unique_es}")
+            apos.append([float(parts[2]), float(parts[3]), float(parts[4])])
+        return np.array(apos), es
+
     # ---- export: write dftb_in.hsd + optional Python runner
-    def _write_hsd(self, atoms, fname, driver=None, delta=1e-4):
+    def _write_hsd(self, atoms, fname, driver=None, delta=1e-4, moved_atoms=None, max_steps=200, max_force_component=0.05):
         """Write a standalone dftb_in.hsd file."""
         es = atoms.get_chemical_symbols()
-        ma = self._max_ang_mom(es)
         with open(fname, 'w') as f:
             f.write("Geometry = GenFormat {\n")
             f.write('  <<< "geo.gen"\n')
             f.write("}\n\n")
-            f.write("Hamiltonian = DFTB {\n")
-            if self.scc:
-                f.write("  SCC = Yes\n")
-            if self.orbital_resolved_scc:
-                f.write("  OrbitalResolvedSCC = Yes\n")
-            f.write("  SlaterKosterFiles = Type2FileNames {\n")
-            f.write(f'    Prefix = "{self.sk_path}"\n')
-            f.write('    Separator = "-"\n')
-            f.write('    Suffix = ".skf"\n')
-            f.write("  }\n")
-            f.write("  MaxAngularMomentum = {\n")
-            for e, am in ma.items():
-                f.write(f'    {e} = "{am}"\n')
-            f.write("  }\n")
-            if self.temperature > 0:
-                f.write(f"  Filling = Fermi {{ Temperature [Kelvin] = {self.temperature} }}\n")
-            if self.method in ('D3', 'D3H5'):
-                f.write("  Dispersion = DftD3 {\n")
-                f.write("    Damping = BeckeJohnson {}\n")
+            if self.hamiltonian == 'xTB':
+                f.write('Hamiltonian = xTB {\n')
+                f.write(f'  Method = "{self.method}"\n')
+                if self.kpts is not None:
+                    kp = self.kpts if isinstance(self.kpts, tuple) else tuple(self.kpts)
+                    if all(k == 1 for k in kp):
+                        # Gamma point only
+                        f.write("  KPointsAndWeights {\n")
+                        f.write("    0.0 0.0 0.0  1.0\n")
+                        f.write("  }\n")
+                    else:
+                        # Supercell folding for k-point mesh
+                        f.write(f"  KPointsAndWeights = SupercellFolding {{ {kp[0]} {kp[1]} {kp[2]} 0.0 0.0 0.0 }}\n")
+                # Looser tolerance for GFN2-xTB convergence
+                if self.method == 'GFN2-xTB':
+                    f.write("  SCCTolerance = 1.0E-4\n")
+                else:
+                    f.write("  SCCTolerance = 1.0E-5\n")
+                f.write("}\n")
+            else:
+                ma = self._max_ang_mom(es)
+                f.write("Hamiltonian = DFTB {\n")
+                if self.scc:
+                    f.write("  SCC = Yes\n")
+                # OrbitalResolvedSCC not supported in this DFTB+ version
+                # if self.orbital_resolved_scc:
+                #     f.write("  OrbitalResolvedSCC = Yes\n")
+                f.write("  SlaterKosterFiles = Type2FileNames {\n")
+                prefix = self.sk_path if self.sk_path.endswith('/') else self.sk_path + '/'
+                f.write(f'    Prefix = "{prefix}"\n')
+                f.write('    Separator = "-"\n')
+                f.write('    Suffix = ".skf"\n')
                 f.write("  }\n")
-            if self.kpts is not None:
-                kp = self.kpts if isinstance(self.kpts, tuple) else tuple(self.kpts)
-                f.write(f"  KPointsAndWeights = SupercellFolding {{ {kp[0]} {kp[1]} {kp[2]} 0.0 0.0 0.0 }}\n")
-            f.write("}\n")
+                f.write("  MaxAngularMomentum = {\n")
+                for e, am in ma.items():
+                    f.write(f'    {e} = "{am}"\n')
+                f.write("  }\n")
+                if self.temperature > 0:
+                    f.write(f"  Filling = Fermi {{ Temperature [Kelvin] = {self.temperature} }}\n")
+                if self.method in ('D3', 'D3H5'):
+                    f.write("  Dispersion = DftD3 {\n")
+                    f.write("    Damping = BeckeJohnson {}\n")
+                    f.write("  }\n")
+                if self.kpts is not None:
+                    kp = self.kpts if isinstance(self.kpts, tuple) else tuple(self.kpts)
+                    if all(k == 1 for k in kp):
+                        # Gamma point only
+                        f.write("  KPointsAndWeights {\n")
+                        f.write("    0.0 0.0 0.0  1.0\n")
+                        f.write("  }\n")
+                    else:
+                        # Supercell folding for k-point mesh
+                        f.write(f"  KPointsAndWeights = SupercellFolding {{ {kp[0]} {kp[1]} {kp[2]} 0.0 0.0 0.0 }}\n")
+                f.write("}\n")
             if driver == 'SecondDerivatives':
                 f.write("\nAnalysis = {\n")
                 f.write(f"  SecondDerivatives {{ Delta = {delta} }}\n")
                 f.write("}\n")
             elif driver == 'Optimize':
-                f.write("\nDriver = {}\n")
+                f.write("\nDriver = ConjugateGradient {\n")
+                if moved_atoms is not None:
+                    import numpy as np
+                    if isinstance(moved_atoms, (list, tuple, np.ndarray)):
+                        ma_idx = [int(i) for i in moved_atoms]
+                        ma_idx = sorted(set(ma_idx))
+                        if len(ma_idx) == 0:
+                            raise ValueError('DFTBPlusBackend._write_hsd(): moved_atoms is empty')
+                        contiguous = (ma_idx[-1] - ma_idx[0] + 1) == len(ma_idx)
+                        if contiguous:
+                            moved_atoms_str = f"{ma_idx[0]}:{ma_idx[-1]}"
+                        else:
+                            moved_atoms_str = "{ " + " ".join(str(i) for i in ma_idx) + " }"
+                    else:
+                        moved_atoms_str = str(moved_atoms)
+                    f.write(f"  MovedAtoms = {moved_atoms_str}\n")
+                f.write(f"  MaxSteps = {int(max_steps)}\n")
+                f.write(f"  MaxForceComponent = {float(max_force_component)}\n")
+                f.write("}\n")
             f.write("\nOptions {\n")
             f.write("  WriteResultsTag = Yes\n")
             f.write("}\n")
@@ -268,7 +423,10 @@ class DFTBPlusBackend(CalculationBackend):
         atoms = self._to_ase(geom)
         os.makedirs(outdir, exist_ok=True)
         hsd_path = os.path.join(outdir, fname)
-        self._write_hsd(atoms, hsd_path, driver='Optimize')
+        moved_atoms = kw.get('moved_atoms', None)
+        max_steps = kw.get('max_steps', 200)
+        max_force_component = kw.get('max_force_component', 0.05)
+        self._write_hsd(atoms, hsd_path, driver='Optimize', moved_atoms=moved_atoms, max_steps=max_steps, max_force_component=max_force_component)
         gen_path = os.path.join(outdir, 'geo.gen')
         self._write_gen(atoms, gen_path)
         return [hsd_path, gen_path]

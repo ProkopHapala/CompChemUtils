@@ -22,6 +22,11 @@ We develop rigorous scientific software where debuggability, numerical correctne
 ## Rule 3 — Reusable Architecture
 
 - **Inventory First:** Thoroughly review reference source-code files to identify existing functions, modules, and data structures before writing anything from scratch. Use `CODEMAP.md` and `/doc/topical_audit/topical_audit.md` for guidance.
+- **Orthogonal Architecture:** The Python subsystem (`py/`) follows a strict three-layer orthogonal design:
+  1. **Geometry layer** (`AtomicSystem.py`, `geom_engine.py`) — handles all chemistry/geometry operations
+  2. **Task layer** (`py/tasks/`) — orchestrates calculation types (relax, scan, vibrations, etc.)
+  3. **Backend layer** (`py/interfaces/`) — wraps QC software (DFTB+, PySCF, Psi4, xTB, GPAW, MMFF)
+  Tasks are backend-agnostic; backends declare `capabilities`. Never mix backend-specific code into task modules. See `ARCHITECTURE.md`.
 - **Composability Over Bloat:** Build integrated systems, not isolated scripts. Refactor into reusable functions in shared modules.
 - **Separation of Concerns:**
    - Separate compute algorithms from plotting/diagnostics (no plotting in core libraries).

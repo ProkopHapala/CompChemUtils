@@ -344,7 +344,7 @@ ase-gui tmp/ag111_movies/H2O_Ag111_attach_orients.xyz
 
 From Python (or a small script):
 ```python
-from py.export_gpaw_jobs import write_gpaw_runner
+from py.interfaces.gpaw import write_gpaw_runner
 
 # Freeze all surface atoms (indices 0 to 8 for 2x2x2 slab + adatom)
 write_gpaw_runner(

@@ -4,10 +4,10 @@ import sys
 import os
 import psi4
 
-sys.path.append('../../')
-from pyBall import atomicUtils as au
-from pyBall import FFFit as fff
-from pyBall import psi4_utils as psi4u
+sys.path.insert(0, '../../')
+from py import atomicUtils as au
+from py import FFFit as fff
+from py.interfaces import psi4 as psi4u
 
 import numpy as np
 import matplotlib.pyplot as plt

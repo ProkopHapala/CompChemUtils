@@ -157,15 +157,20 @@ class XTBBBackend(CalculationBackend):
     # ---- xtb CLI local execution
     def _xtb_energy(self, geom, **kw) -> float:
         apos, es = self._to_arrays(geom)
-        import tempfile
+        import tempfile, shutil
         wd = tempfile.mkdtemp(prefix='xtb_')
-        xyz = os.path.join(wd, 'input.xyz')
-        self._write_xyz(apos, es, xyz)
-        cmd = self._build_xtb_cmd(xyz, task='--sp')
-        env = os.environ.copy()
-        env['OMP_NUM_THREADS'] = str(self.n_threads)
-        subprocess.run(cmd, cwd=wd, env=env, check=True, capture_output=True)
-        E = self._parse_xtb_energy(os.path.join(wd, 'xtb.out'))
+        try:
+            xyz = os.path.join(wd, 'input.xyz')
+            self._write_xyz(apos, es, xyz)
+            cmd = self._build_xtb_cmd(xyz, task='--sp')
+            env = os.environ.copy()
+            env['OMP_NUM_THREADS'] = str(self.n_threads)
+            out_path = os.path.join(wd, 'xtb.out')
+            with open(out_path, 'w') as fout:
+                subprocess.run(cmd, cwd=wd, env=env, check=True, stdout=fout, stderr=fout)
+            E = self._parse_xtb_energy(out_path)
+        finally:
+            shutil.rmtree(wd, ignore_errors=True)
         return E
 
     def _xtb_relax(self, geom, fmax=0.05, maxsteps=200, **kw):
@@ -174,7 +179,7 @@ class XTBBBackend(CalculationBackend):
         wd = tempfile.mkdtemp(prefix='xtb_')
         xyz = os.path.join(wd, 'input.xyz')
         self._write_xyz(apos, es, xyz)
-        cmd = self._build_xtb_cmd(xyz, task='--opt')
+        cmd = self._build_xtb_cmd(xyz, task='--opt', gmax=fmax)
         env = os.environ.copy()
         env['OMP_NUM_THREADS'] = str(self.n_threads)
         subprocess.run(cmd, cwd=wd, env=env, check=True, capture_output=True)
@@ -213,7 +218,7 @@ class XTBBBackend(CalculationBackend):
         # For now return frequencies only (modes would need hessian reading)
         return VibResult(geom=geom, frequencies=np.array(freqs), modes=np.zeros((len(freqs), na, 3)), masses=masses)
 
-    def _build_xtb_cmd(self, xyz, task='--sp'):
+    def _build_xtb_cmd(self, xyz, task='--sp', etol=None, gmax=None):
         cmd = [self._find_xtb(), xyz, task]
         if self.method == 'GFN1-xTB':
             cmd += ['--gfn', '1']
@@ -231,6 +236,10 @@ class XTBBBackend(CalculationBackend):
             cmd += ['--alpb', self.solvent]
         if self.accuracy != 1.0:
             cmd += ['--acc', str(self.accuracy)]
+        if etol is not None:
+            cmd += ['--etol', str(etol)]
+        if gmax is not None:
+            cmd += ['--gmax', str(gmax)]
         return cmd
 
     def _parse_xtb_energy(self, outpath):

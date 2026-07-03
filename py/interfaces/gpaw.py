@@ -98,9 +98,8 @@ def export_surface_movie_from_molecule_frames(
                 es = surf_es + mol_es
                 ps = np.vstack([surf_ps, mol_ps2])
                 comment = f"dof={idof} idir={idir} iroll={iroll} dir={ddir['name']} theta={ddir['theta_deg']:.1f} roll={rdeg:.1f} host={host_element}[{i_host}] dist={dist:.3f} surf=Ag111_{surface_size[0]}x{surface_size[1]}x{surface_size[2]} adH={adatom_height:.3f}"
-                flat = ' '.join(f'{v:.6f}' for v in lvec.flatten())
-                extxyz_comment = f'Lattice="{flat}" Properties=species:S:1:pos:R:3 {comment}'
-                au.writeToXYZ(fout, es, ps, qs=qs, comment=extxyz_comment, bHeader=True)
+                lvs_comment = ( "lvs %6.3f %6.3f %6.3f   %6.3f %6.3f %6.3f   %6.3f %6.3f %6.3f " %(lvec[0,0],lvec[0,1],lvec[0,2],  lvec[1,0],lvec[1,1],lvec[1,2],  lvec[2,0],lvec[2,1],lvec[2,2]   ) ) + comment
+                au.writeToXYZ(fout, es, ps, qs=qs, comment=lvs_comment, bHeader=True)
     if outdir_struct is not None:
         _ensure_dir(outdir_struct)
         try:
@@ -232,9 +231,8 @@ def export_surface_edgepair_movie_from_molecule(
                     ei, ej = es[int(i)], es[int(j)]
                     print(f"  {k:02d} {int(i):4d}({ei}) {int(j):4d}({ej}) r={float(r):.3f}  rmin={float(rmin):.3f}")
             comment = f"dof={it} tilt={float(tilt):.2f} lift={float(lift):.3f} edge=({i_ad0},{i_ad1}) anchor={int(i_anchor)} axis=({int(i0_axis)},{int(i1_axis)}) surf=Ag111_{surface_size[0]}x{surface_size[1]}x{surface_size[2]} adH={adatom_height:.3f} shift={float(shift_frac[0]):.3f},{float(shift_frac[1]):.3f}"
-            flat = ' '.join(f'{v:.6f}' for v in lvec.flatten())
-            extxyz_comment = f'Lattice="{flat}" Properties=species:S:1:pos:R:3 {comment}'
-            au.writeToXYZ(fout, es, ps, qs=qs, comment=extxyz_comment, bHeader=True)
+            lvs_comment = ( "lvs %6.3f %6.3f %6.3f   %6.3f %6.3f %6.3f   %6.3f %6.3f %6.3f " %(lvec[0,0],lvec[0,1],lvec[0,2],  lvec[1,0],lvec[1,1],lvec[1,2],  lvec[2,0],lvec[2,1],lvec[2,2]   ) ) + comment
+            au.writeToXYZ(fout, es, ps, qs=qs, comment=lvs_comment, bHeader=True)
     if outdir_struct is not None:
         _ensure_dir(outdir_struct)
         try:

@@ -16,6 +16,16 @@ tools:
   gpaw_command: python -m gpaw
   phonopy_bin: phonopy
 
+# ---- DFTB+ shared libraries ----
+#  libdftbcore.so is needed by pyBall.DFTB.DFTBcore (ctypes).
+#  It may require LD_LIBRARY_PATH to include local toml-f/tblite
+#  build dirs to avoid undefined-symbol errors.
+dftb:
+  libdftbcore: /path/to/libdftbcore.so
+  ld_library_extra:
+    - /path/to/toml-f/origin
+    - /path/to/tblite/origin
+
 # ---- DFTB+ Slater–Koster files ----
 # All .skf sets (auorg, mio, 3ob, hyb, agch-clust, …) are expected
 # to live in ONE directory.  DFTB+ uses Prefix + "-" + Suffix to

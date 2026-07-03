@@ -1018,10 +1018,9 @@ class AtomicSystem( ):
                 m_c = au.normalize(np.cross( v1, m_b ))
                 self.place_electron_pair(i, v1*-0.5 + m_c*0.86602540378)
                 self.place_electron_pair(i, v1*-0.5 - m_c*0.86602540378)
-        # elif npi == 2:
-        #     if nb == 1:
-        #         m_c = normalize(neighbors[0] - pos)
-        #         self._place_electron_pair(i, -m_c)
+        elif npi == 2:
+            if nb == 1:  # like N in H-C≡N: one sigma, lone pair opposite
+                self.place_electron_pair(i, -v1)
 
     def place_electron_pair(self, i, direction, distance=0.5, ename='E', atype=200, qs=0.0, Rs=1.0):
         """

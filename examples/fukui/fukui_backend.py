@@ -7,7 +7,7 @@ No plotting code here; thin CLI wrappers call these functions and handle I/O.
 
 import os
 import numpy as np
-from pyscf import gto, dft
+from pyscf import gto, dft, scf
 from pyscf.tools import cubegen
 
 B2A = 0.529177210903  # Bohr to Angstrom
@@ -28,7 +28,7 @@ def read_xyz(fname):
     return '; '.join(atoms)
 
 
-def run_sp(mol_geom, basis, xc_func, charge, spin, ecp=None):
+def run_sp(mol_geom, basis, xc_func, charge, spin, ecp=None, smearing_sigma=None):
     """Run a single-point DFT calculation at fixed geometry.
 
     Parameters
@@ -45,6 +45,9 @@ def run_sp(mol_geom, basis, xc_func, charge, spin, ecp=None):
         Spin multiplicity (0 for singlet, 1 for doublet, ...).
     ecp : str or dict, optional
         ECP/pseudopotential specification (e.g. 'def2-SVP' for Ag).
+    smearing_sigma : float, optional
+        Fermi-Dirac smearing width in Hartree. Use ~0.01 for metallic
+        clusters; None disables smearing.
 
     Returns
     -------
@@ -54,6 +57,8 @@ def run_sp(mol_geom, basis, xc_func, charge, spin, ecp=None):
     mol.build()
     mf = dft.RKS(mol) if spin == 0 else dft.UKS(mol)
     mf.xc = xc_func
+    if smearing_sigma is not None:
+        mf = scf.addons.smearing_(mf, method='fermi', sigma=smearing_sigma)
     mf.kernel()
     return mol, mf
 
@@ -191,7 +196,8 @@ def write_mulliken_table(fname, labels, fA_plus, fA_minus, fA_0):
 
 
 def run_fukui_for_molecule(name, geom_str, outdir, basis='def2-svp', xc_func='b3lyp',
-                           resolution=0.15, margin=4.0, spin_N=0, spin_A=1, spin_C=1, ecp=None):
+                           resolution=0.15, margin=4.0, spin_N=0, spin_A=1, spin_C=1,
+                           ecp=None, smearing_sigma=None):
     """Full Fukui workflow for a single molecule.
 
     Parameters
@@ -210,6 +216,9 @@ def run_fukui_for_molecule(name, geom_str, outdir, basis='def2-svp', xc_func='b3
         Spin multiplicity for neutral, anion, cation (default: 0, 1, 1).
     ecp : str or dict, optional
         ECP/pseudopotential specification.
+    smearing_sigma : float, optional
+        Fermi-Dirac smearing width in Hartree. Use ~0.01 for metallic
+        clusters; None disables smearing.
 
     Returns
     -------
@@ -225,15 +234,15 @@ def run_fukui_for_molecule(name, geom_str, outdir, basis='def2-svp', xc_func='b3
 
     # ---- Run SCF for N, N+1, N-1 ---------------------------------------
     print("  Neutral  (N)  ...")
-    mol_N, mf_N = run_sp(geom_str, basis, xc_func, charge=0, spin=spin_N, ecp=ecp)
+    mol_N, mf_N = run_sp(geom_str, basis, xc_func, charge=0, spin=spin_N, ecp=ecp, smearing_sigma=smearing_sigma)
     print(f"    E_N  = {mf_N.e_tot:.6f} Ha")
 
     print("  Anion    (N+1) ...")
-    mol_A, mf_A = run_sp(geom_str, basis, xc_func, charge=-1, spin=spin_A, ecp=ecp)
+    mol_A, mf_A = run_sp(geom_str, basis, xc_func, charge=-1, spin=spin_A, ecp=ecp, smearing_sigma=smearing_sigma)
     print(f"    E_A  = {mf_A.e_tot:.6f} Ha")
 
     print("  Cation   (N-1) ...")
-    mol_C, mf_C = run_sp(geom_str, basis, xc_func, charge=1, spin=spin_C, ecp=ecp)
+    mol_C, mf_C = run_sp(geom_str, basis, xc_func, charge=1, spin=spin_C, ecp=ecp, smearing_sigma=smearing_sigma)
     print(f"    E_C  = {mf_C.e_tot:.6f} Ha")
 
     # ---- Write cube files ----------------------------------------------
@@ -247,12 +256,30 @@ def run_fukui_for_molecule(name, geom_str, outdir, basis='def2-svp', xc_func='b3
     write_density_cube(mol_C, mf_C, cube_C, resolution, margin)
 
     # ---- Save .npy copies ----------------------------------------------
-    rho_N, _, _, _, _ = read_cube(cube_N)
+    rho_N, origin, shape, vecs, atoms = read_cube(cube_N)
     rho_A, _, _, _, _ = read_cube(cube_A)
     rho_C, _, _, _, _ = read_cube(cube_C)
     np.save(os.path.join(resdir, 'rho_N.npy'), rho_N)
     np.save(os.path.join(resdir, 'rho_A.npy'), rho_A)
     np.save(os.path.join(resdir, 'rho_C.npy'), rho_C)
+
+    # ---- Compute Fukui grids -------------------------------------------
+    f_plus = rho_A - rho_N
+    f_minus = rho_N - rho_C
+    f_zero = 0.5 * (f_plus + f_minus)
+
+    # Save Fukui grids as .npy
+    np.save(os.path.join(resdir, 'fukui_f_plus.npy'), f_plus)
+    np.save(os.path.join(resdir, 'fukui_f_minus.npy'), f_minus)
+    np.save(os.path.join(resdir, 'fukui_f_zero.npy'), f_zero)
+
+    # Save Fukui grids as .cube files
+    write_cube(os.path.join(resdir, 'fukui_f_plus.cube'), f_plus, origin, vecs, atoms,
+               comment1=f'{name} Fukui f+', comment2=f'{xc_func}/{basis}')
+    write_cube(os.path.join(resdir, 'fukui_f_minus.cube'), f_minus, origin, vecs, atoms,
+               comment1=f'{name} Fukui f-', comment2=f'{xc_func}/{basis}')
+    write_cube(os.path.join(resdir, 'fukui_f_zero.cube'), f_zero, origin, vecs, atoms,
+               comment1=f'{name} Fukui f0', comment2=f'{xc_func}/{basis}')
 
     # ---- Condensed Mulliken indices ------------------------------------
     labels, fA_plus, fA_minus, fA_0 = compute_fukui_mulliken(mol_N, mf_N, mol_A, mf_A, mol_C, mf_C)

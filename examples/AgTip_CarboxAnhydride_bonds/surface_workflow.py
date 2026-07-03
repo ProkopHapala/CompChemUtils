@@ -33,6 +33,7 @@ from py.interfaces import gpaw as egj
 from py import geom_engine as ge
 from py.interfaces.psi4 import Psi4Backend
 from py import plotUtils as pu
+from py.AtomicSystem import AtomicSystem
 
 import matplotlib.pyplot as plt
 
@@ -81,14 +82,10 @@ def _add_viz_args(sub):
 
 def _plot_preview(xyz_path, outdir, replicate=(1, 1)):
     """Load first frame and plot XY/XZ preview using plotUtils.plotGeometry."""
-    try:
-        from ase.io import read
-    except ImportError:
-        return
-    atoms = read(xyz_path, index=0)
-    es = list(atoms.get_chemical_symbols())
-    ps = atoms.get_positions()
-    lvs = atoms.get_cell()
+    mol = AtomicSystem(fname=xyz_path)
+    ps = mol.apos
+    es = mol.enames
+    lvs = mol.lvec
     tag = os.path.splitext(os.path.basename(xyz_path))[0]
     fig, axes = plt.subplots(1, 2, figsize=(10, 5))
     pu.plotGeometry(ps, es, lvs=lvs, replicate=(replicate[0], replicate[1], 1),

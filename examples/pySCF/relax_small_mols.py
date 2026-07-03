@@ -13,11 +13,11 @@ import sys
 import os
 #from tkinter import UNITS
 import pyscf
-sys.path.append('../../')
-from pyBall import atomicUtils as au
-from pyBall import FFFit       as fff
-from pyBall import pyscf_utils as scfu
-from pyBall import plotUtils   as plu
+sys.path.insert(0, '../../')
+from py import atomicUtils as au
+from py import FFFit       as fff
+from py.interfaces import pyscf as scfu
+from py import plotUtils   as plu
 import numpy as np
 import matplotlib.pyplot as plt
 

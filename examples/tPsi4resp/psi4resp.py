@@ -15,9 +15,9 @@ import time
 import psi4
 import resp
 
-sys.path.append("../../")
-from pyBall import psi4_utils  as psi4u
-from pyBall import atomicUtils as au
+sys.path.insert(0, "../../")
+from py.interfaces import psi4 as psi4u
+from py import atomicUtils as au
 
 
 

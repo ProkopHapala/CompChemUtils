@@ -86,20 +86,32 @@ class PySCFBackend(CalculationBackend):
     """PySCF local execution backend.
 
     Lazy-loads pyscf_utils to avoid import-time dependency on PySCF.
+
+    engine: 'geometric' (default, pySCF built-in) or 'ase' (ASE BFGS optimizer,
+            often faster for metal clusters)
     """
     name = "pyscf"
     capabilities = {'energy', 'relax', 'vibrations', 'density', 'esp', 'fukui'}
 
-    def __init__(self, verbose: int = 0):
+    def __init__(self, verbose: int = 0, engine: str = 'geometric'):
         self.verbose = verbose
+        self.engine = engine
 
     def _import_pyscf(self):
         import pyscf
         return pyscf
 
     # ---- helpers
-    def _to_pyscf_mol(self, geom, basis: Optional[str] = None):
-        """Convert AtomicSystem or (apos, es) tuple to pyscf.M."""
+    def _to_pyscf_mol(self, geom, basis=None, ecp=None):
+        """Convert AtomicSystem or (apos, es) tuple to pyscf.M.
+
+        Parameters
+        ----------
+        basis : str or dict
+            Basis set specification (e.g. 'def2-svp' or element dict)
+        ecp : str or dict
+            ECP specification (e.g. {'Au': 'lanl2dz'})
+        """
         pyscf = self._import_pyscf()
         if hasattr(geom, 'apos') and hasattr(geom, 'enames'):
             apos, es = geom.apos, geom.enames
@@ -109,6 +121,8 @@ class PySCFBackend(CalculationBackend):
         kwargs = {'atom': atom_str, 'verbose': self.verbose}
         if basis is not None:
             kwargs['basis'] = basis
+        if ecp is not None:
+            kwargs['ecp'] = ecp
         return pyscf.M(**kwargs)
 
     def _mol_to_geom(self, mol):
@@ -116,10 +130,11 @@ class PySCFBackend(CalculationBackend):
         return unpack_mol(mol)
 
     # ---- local execution
-    def run_energy(self, geom, method: str = 'hf', basis: Optional[str] = None, **kw) -> float:
+    def run_energy(self, geom, method: str = 'hf', basis: Optional[str] = None,
+                   ecp=None, **kw) -> float:
         self.check('energy')
         pyscf = self._import_pyscf()
-        mol = self._to_pyscf_mol(geom, basis)
+        mol = self._to_pyscf_mol(geom, basis, ecp=ecp)
         if method.lower() in ('hf', 'rhf'):
             E = pyscf.scf.RHF(mol).kernel()
         elif method.lower() == 'uhf':
@@ -131,11 +146,11 @@ class PySCFBackend(CalculationBackend):
         return float(E) * hartree2eV
 
     def run_relax(self, geom, method: str = 'hf', basis: Optional[str] = None,
-                  constraints=None, **kw) -> object:
+                  ecp=None, constraints=None, **kw) -> object:
         """Returns optimized AtomicSystem (or (apos, es) tuple if AtomicSystem unavailable)."""
         self.check('relax')
         pyscf = self._import_pyscf()
-        mol = self._to_pyscf_mol(geom, basis)
+        mol = self._to_pyscf_mol(geom, basis, ecp=ecp)
         mol.verbose = self.verbose
         if method.lower() in ('hf', 'rhf'):
             calc = pyscf.scf.RHF(mol)
@@ -148,7 +163,9 @@ class PySCFBackend(CalculationBackend):
         if constraints:
             import warnings
             warnings.warn("PySCFBackend.run_relax(): constraints not yet implemented in PySCF interface; ignored.")
-        mol_opt = calc.Gradients().optimizer(solver='berny').kernel()
+        if self.engine == 'ase':
+            return self._relax_ase(geom, calc, constraints=constraints, **kw)
+        mol_opt = pyscf.geomopt.optimize(calc)
         apos, es = self._mol_to_geom(mol_opt)
         # Return AtomicSystem if input was one
         if hasattr(geom, 'apos'):
@@ -158,6 +175,54 @@ class PySCFBackend(CalculationBackend):
             out.enames = list(es)
             return out
         return (apos, list(es))
+
+    def _relax_ase(self, geom, calc, constraints=None, fmax: float = 0.01,
+                   maxsteps: int = 200, **kw) -> object:
+        """Relax using ASE BFGS (often faster for metal clusters than geometric internal coords)."""
+        import numpy as np
+        from ase import Atoms
+        from ase.optimize import BFGS
+        from ase.calculators.calculator import Calculator
+
+        class _PySCFCalc(Calculator):
+            implemented_properties = ['energy', 'forces']
+            def __init__(self, calc):
+                super().__init__()
+                self._calc = calc
+            def calculate(self, atoms, properties, system_changes):
+                pos = atoms.get_positions()
+                self._calc.mol.set_geom_(pos, unit='Ang')
+                e = self._calc.kernel()
+                grad = self._calc.nuc_grad_method().kernel()
+                self.results['energy'] = e * 27.211396641308  # Ha -> eV
+                self.results['forces'] = -np.array(grad) * 51.42208712055592  # Ha/Bohr -> eV/A
+
+        apos_in, es_in = (geom.apos, geom.enames) if hasattr(geom, 'apos') else geom
+        ase_atoms = Atoms(symbols=es_in, positions=apos_in)
+        ase_atoms.calc = _PySCFCalc(calc)
+
+        # Apply freeze_atoms constraints via ASE FixAtoms
+        if constraints:
+            from ase.constraints import FixAtoms
+            freeze_inds = []
+            for c in constraints:
+                if c.type == 'freeze_atoms':
+                    freeze_inds.extend(c.atoms)
+            if freeze_inds:
+                ase_atoms.set_constraint(FixAtoms(indices=freeze_inds))
+
+        opt = BFGS(ase_atoms)
+        opt.run(fmax=fmax, steps=maxsteps)
+
+        apos = np.array(ase_atoms.positions)
+        es = list(ase_atoms.get_chemical_symbols())
+        if hasattr(geom, 'apos'):
+            from ..AtomicSystem import AtomicSystem
+            out = AtomicSystem()
+            out.apos = apos
+            out.enames = es
+            return out
+        return (apos, es)
 
     def run_vibrations(self, geom, method: str = 'hf', basis: Optional[str] = None, **kw) -> VibResult:
         self.check('vibrations')

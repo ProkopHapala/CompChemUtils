@@ -10,14 +10,17 @@ tmp/
 # User / agent tooling (not part of repo)
 .devin/
 
-*.npz
-*.npy
-*.dat
-*.log
-*.out
-*.jpg
-*.png
-*.svg
+# *.npz
+# *.npy
+# *.dat
+# *.log
+# *.out
+# *.jpg
+# *.png
+# *.svg
 
 # External data symlink/copy (use FireCore repo directly)
 data/FireCore/
+
+# Machine-specific configuration (copy from machine_config.template.yaml)
+machine_config.yaml
