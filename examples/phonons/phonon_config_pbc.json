@@ -1,0 +1,19 @@
+{
+  "tools": {
+    "lammps_bin": "/home/prokop/SW/lammps-29Aug2024/src/lmp_serial",
+    "dftb_bin": "/home/prokop/git_SW/dftbplus/Build/app/dftb+/dftb+",
+    "slakos_dir": "/home/prokop/SIMULATIONS/dftbplus/slakos/pbc-0-3",
+    "phonopy_bin": "phonopy",
+    "alamode_displace": "displace.py",
+    "alamode_extract": "extract.py",
+    "alamode_alm": "alm",
+    "alamode_anphon": "anphon",
+    "phonondb_dir": "/home/prokop/SIMULATIONS/phononDB_repo"
+  },
+  "potentials": {
+    "si_sw": "/home/prokop/SW/lammps-29Aug2024/potentials/Si.sw",
+    "si_tersoff": "/home/prokop/SW/lammps-29Aug2024/potentials/Si.tersoff",
+    "c_tersoff": "/home/prokop/SW/lammps-29Aug2024/potentials/SiC.tersoff",
+    "meam_library": "/home/prokop/SW/lammps-29Aug2024/potentials/library.meam"
+  }
+}

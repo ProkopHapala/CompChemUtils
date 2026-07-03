@@ -1,0 +1,71 @@
+#!/bin/bash
+#PBS -N gpaw_fukui
+#PBS -l select=1:ncpus=4:mem=8gb:scratch_local=10gb
+#PBS -l walltime=04:00:00
+#PBS -j oe
+#PBS -m bae
+
+# ==================================================================
+# GPAW Fukui function calculation for one molecule
+#
+# Usage:
+#   qsub -v mol=H2O       submit.pbs
+#   qsub -v mol=pentacene submit.pbs
+#
+# For large molecules (pentacene, PTCDA), override resources:
+#   qsub -v mol=pentacene -l select=1:ncpus=16:mem=32gb:scratch_local=20gb -l walltime=12:00:00 submit.pbs
+#
+# Variables you can override with -v:
+#   mol     = molecule name (REQUIRED)
+#   ecut    = plane-wave cutoff in eV (default 500)
+#   vacuum  = vacuum padding in Angstrom (default 12)
+#   xc      = XC functional (default PBE)
+# ==================================================================
+
+# --- Parameters ---
+MOL="${mol:-H2O}"
+ECUT="${ecut:-500}"
+VACUUM="${vacuum:-12}"
+XC="${xc:-PBE}"
+
+# --- Trap for cleanup ---
+trap 'clean_scratch' EXIT
+clean_scratch() {
+    echo "Job caught signal or exited. Copying outputs..."
+    cp -r $SCRATCHDIR/* $PBS_O_WORKDIR/ 2>/dev/null
+    rm -rf $SCRATCHDIR/* 2>/dev/null
+}
+
+# --- Setup ---
+cd $PBS_O_WORKDIR
+module purge
+module add gpaw
+
+export OMP_NUM_THREADS=1
+
+echo "=== GPAW Fukui job ==="
+echo "Node: $(hostname)"
+echo "CPUs: $PBS_NUM_PPN"
+echo "Molecule: $MOL"
+echo "ECUT: $ECUT eV, Vacuum: $VACUUM A, XC: $XC"
+echo "Started: $(date)"
+echo ""
+
+# --- Copy inputs to scratch ---
+cp -r $PBS_O_WORKDIR/run_fukui.py $SCRATCHDIR/
+cp -r $PBS_O_WORKDIR/geometries $SCRATCHDIR/
+
+cd $SCRATCHDIR
+
+# --- Run calculation ---
+mpirun -np $PBS_NUM_PPN gpaw-python run_fukui.py \
+    --mol $MOL --ecut $ECUT --vacuum $VACUUM --xc $XC \
+    --outdir $SCRATCHDIR/results --geom-dir $SCRATCHDIR/geometries \
+    2>&1
+
+echo ""
+echo "Finished: $(date)"
+
+# --- Copy results back ---
+echo "Copying results to $PBS_O_WORKDIR ..."
+cp -r $SCRATCHDIR/results $PBS_O_WORKDIR/ 2>/dev/null

@@ -20,6 +20,7 @@ and overlay/benchmark phonon dispersion curves for bulk Si and diamond.
 | File | Purpose |
 |------|---------|
 | `phonon_config.json` | Tool and potential path configuration (edit for your system) |
+| `phonon_config_pbc.json` | PBC-specific config variant (same format, for periodic calculations) |
 | `download_phonon_refs.py` | Download phonon data from MP, phonondb, Mendeley Data |
 | `setup_alamode_phonon.py` | Generate ALAMODE + LAMMPS input files |
 | `setup_dftb_phonon.py` | Generate DFTB+ + phonopy input files |
@@ -28,6 +29,7 @@ and overlay/benchmark phonon dispersion curves for bulk Si and diamond.
 | `plot_phonon_benchmark.py` | Overlay and benchmark phonon dispersions |
 | `plot_phonons.py` | Simple phonon band plotter |
 | `plot_alamode_overlay.py` | ALAMODE-specific overlay plotter |
+| `test_diamond_phonon_bands.py` | Standalone phonon band calculation for diamond primitive cell using pyBall MMFF force constants. Builds supercell Hessian, Bloch-phase sum to D(k), diagonalizes. CLI: `--supercell`, `--q-path`. |
 | `export_phonon_bands.py` | Export multi-method bands to single text file |
 | `experimental_phonon_data.json` | Reference INS data points (Si & diamond) |
 

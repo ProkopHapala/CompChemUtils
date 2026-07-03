@@ -1,0 +1,84 @@
+#!/bin/bash
+#PBS -N gpaw_fukui
+#PBS -l select=1:ncpus=16:mem=32gb:scratch_local=20gb
+#PBS -l walltime=12:00:00
+#PBS -j oe
+#PBS -m bae
+
+# ==================================================================
+# GPAW Fukui function calculation for isolated molecules
+# PBE / plane-wave, gamma-point only
+#
+# Usage:
+#   qsub submit_gpaw_fukui.pbs
+#
+# Adjust MOLECULES, ECUT, VACUUM, NCPUS, MEM below as needed.
+# For small molecules (H2O, CH2O, CH2NH, C2H4, pyrrol):
+#   ncpus=8,  mem=16gb, walltime=04:00:00
+# For large molecules (pentacene, PTCDA):
+#   ncpus=16, mem=32gb, walltime=12:00:00
+# ==================================================================
+
+# --- User parameters (edit these) ---
+MOLECULES="H2O CH2O CH2NH C2H4 pyrrol pentacene PTCDA"
+ECUT=500        # plane-wave cutoff in eV (500 = production quality)
+VACUUM=12.0     # vacuum padding in Angstrom
+XC="PBE"
+
+# --- Trap for cleanup ---
+trap 'clean_scratch' EXIT
+clean_scratch() {
+    echo "Job caught signal or exited. Copying outputs..."
+    cp -r $SCRATCHDIR/* $PBS_O_WORKDIR/ 2>/dev/null
+    rm -rf $SCRATCHDIR/* 2>/dev/null
+}
+
+# --- Setup ---
+cd $PBS_O_WORKDIR
+module purge
+module add gpaw
+
+export OMP_NUM_THREADS=1
+export GPAW_SETUP_PATH=${GPAW_SETUP_PATH:-$HOME/gpaw-setups}
+
+echo "=== GPAW Fukui job ==="
+echo "Node: $(hostname)"
+echo "CPUs: $PBS_NUM_PPN"
+echo "Scratch: $SCRATCHDIR"
+echo "Molecules: $MOLECULES"
+echo "ECUT: $ECUT eV, Vacuum: $VACUUM A, XC: $XC"
+echo "Started: $(date)"
+echo ""
+
+# --- Copy inputs to scratch ---
+cp -r $PBS_O_WORKDIR/run_gpaw_fukui_mol.py $SCRATCHDIR/
+cp -r $PBS_O_WORKDIR/fukui_backend.py $SCRATCHDIR/ 2>/dev/null || true
+
+# Copy xyz files — adjust path as needed
+XYZ_SRC="$PBS_O_WORKDIR/../../data/xyz"
+if [ ! -d "$XYZ_SRC" ]; then
+    XYZ_SRC="$HOME/CompChemUtils/data/xyz"
+fi
+cp -r "$XYZ_SRC" $SCRATCHDIR/xyz_data
+XYZ_DIR=$SCRATCHDIR/xyz_data
+
+cd $SCRATCHDIR
+
+# --- Run calculations ---
+for MOL in $MOLECULES; do
+    echo ""
+    echo "========================================"
+    echo "  Running: $MOL"
+    echo "========================================"
+    mpirun -np $PBS_NUM_PPN gpaw-python run_gpaw_fukui_mol.py --mol $MOL --ecut $ECUT --vacuum $VACUUM --xc $XC --xyz-dir $XYZ_DIR --outdir $SCRATCHDIR/results_gpaw 2>&1
+done
+
+echo ""
+echo "========================================"
+echo "  All molecules done."
+echo "========================================"
+
+# --- Copy results back ---
+echo "Copying results to $PBS_O_WORKDIR ..."
+cp -r $SCRATCHDIR/results_gpaw $PBS_O_WORKDIR/ 2>/dev/null
+echo "Finished: $(date)"
