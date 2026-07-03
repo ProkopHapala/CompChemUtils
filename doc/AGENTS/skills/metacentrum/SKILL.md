@@ -47,7 +47,7 @@ rsync -avh --progress prokop@storage-praha1.metacentrum.cz:/home/prokop/PATH .
 | `qstat -f JOBID` | Full details of a job |
 | `qdel JOBID` | Kill a job |
 | `pbsnodes -a` | List compute nodes and properties |
-| `qsub -I -l walltime=00:30:00 -l select=1:ncpus=1:mem=1gb` | Interactive compute node shell |
+| `qsub -I -q luna -l walltime=02:00:00 -l select=1:ncpus=1:mem=2gb` | Interactive compute node shell (always use `-q luna` — dedicated queue with priority) |
 | `quota -s` | Check storage quota |
 
 Job states: `Q` (queued), `R` (running), `E` (exiting), `F` (finished).
@@ -245,3 +245,50 @@ for pidfile in CPU.*.pid; do
     [ -f "$pidfile" ] && wait "$(cat "$pidfile")" 2>/dev/null; rm -f "$pidfile"
 done
 ```
+
+## Interactive Jobs for AI Agents
+
+### Problem
+
+`qsub -I` opens an interactive shell, but AI agent `run_command` calls are separate processes — can't keep a shell open. Two solutions below.
+
+### Method 1: SSH to Compute Node (RECOMMENDED)
+
+1. **User opens `qsub -I` in a terminal** (holds the job allocation):
+   ```bash
+   qsub -I -q luna -l walltime=02:00:00 -l select=1:ncpus=1:mem=2gb
+   ```
+2. **Agent extracts job info** via `py/cluster/interactive_job.py`:
+   ```bash
+   python3 py/cluster/interactive_job.py JOBID --outdir test
+   ```
+   Writes `job_env.json` (machine-readable) + `job_env.sh` (sourceable — exports PBS vars + inits module system).
+   Find JOBID: `qstat -u prokop` → look for `STDIN`/interactive job.
+3. **Agent runs commands via SSH** to the compute node:
+   ```bash
+   ssh NODE 'source /path/to/job_env.sh && module add py-gpaw/24.1.0-gcc-10.2.1-fojjhkw && python3 script.py'
+   ```
+   `job_env.sh` handles module init (`source /cvmfs/.../loadmodules`) — needed because non-interactive SSH skips `profile.d`.
+
+**Key points:**
+- Always use `-q luna` (dedicated queue, priority)
+- Each SSH = fresh shell → must load modules every time (`&&` chain)
+- `PBS_O_PATH` is skipped in `job_env.sh` (would break module system)
+- Python API: `from py.cluster.interactive_job import parse_qstat, extract_node, extract_variables`
+
+### Method 2: tmux Wrapper
+
+```bash
+tmux new-session -d -s mc -x 200 -y 50
+tmux send-keys -t mc 'qsub -I -q luna -l walltime=02:00:00 -l select=1:ncpus=1:mem=2gb' Enter
+sleep 10 && tmux capture-pane -t mc -p          # check if job started
+tmux send-keys -t mc 'module add ... && python3 script.py' Enter
+sleep 5 && tmux capture-pane -t mc -p -S -10    # read output
+tmux kill-session -t mc                          # cleanup
+```
+
+Less reliable than SSH (timing issues with `sleep`/`capture-pane`, line wrapping, no exit codes).
+
+### Full documentation
+
+See `doc/EVIROMENTS_AND_MACHINES/Prokop_Metacentrum.exploration.md` sections "Persistent Interactive PBS Job via tmux" and "Persistent Interactive PBS Job via SSH to Compute Node".
