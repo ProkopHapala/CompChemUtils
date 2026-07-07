@@ -1,58 +1,45 @@
-# Phonon Benchmark Toolkit
+# phonons
 
-CLI scripts to download reference phonon data, set up ALAMODE+LAMMPS calculations,
-and overlay/benchmark phonon dispersion curves for bulk Si and diamond.
+Bulk phonon dispersion toolkit — modular `run_phonon.py` pipeline (DFTB+, LAMMPS, MMFF) plus legacy ALAMODE/phonopy workflows. Config via `phonon_config.json` (copy from template).
 
-## Files
+**Molecular vibrations** (gas-phase Hessians) are in [`../tSiNCs/README.md`](../tSiNCs/README.md), not this folder.
 
-### Modular Phonon Pipeline (NEW)
+Parent index: [`../README.md`](../README.md).
 
-| File | Purpose |
-|------|---------|
-| `phonon_utils.py` | Core library: structure loading, QPath handling, PhononCalculator with caching |
-| `phonon_backends.py` | Pluggable force calculators: DFTBBackend, LAMMPSBackend, MMFFBackend |
-| `run_phonon.py` | Main CLI: compute phonon bands with any backend, supports q-path files and auto-generation |
-| `plot_phonon_comparison.py` | Multi-method comparison plotter with strict q-path validation |
-| `plot_bz_paths_3d.py` | 3D Brillouin zone path visualizer (matplotlib) |
+---
 
-### Legacy Workflows (still functional)
+## File index
 
-| File | Purpose |
-|------|---------|
-| `phonon_config.json` | Tool and potential path configuration (edit for your system) |
-| `phonon_config_pbc.json` | PBC-specific config variant (same format, for periodic calculations) |
-| `download_phonon_refs.py` | Download phonon data from MP, phonondb, Mendeley Data |
-| `setup_alamode_phonon.py` | Generate ALAMODE + LAMMPS input files |
-| `setup_dftb_phonon.py` | Generate DFTB+ + phonopy input files |
-| `run_alamode_phonon.py` | ALAMODE + LAMMPS runner |
-| `run_phonopy_phonon.py` | Original phonopy + DFTB/LAMMPS runner (reference) |
-| `plot_phonon_benchmark.py` | Overlay and benchmark phonon dispersions |
-| `plot_phonons.py` | Simple phonon band plotter |
-| `plot_alamode_overlay.py` | ALAMODE-specific overlay plotter |
-| `test_diamond_phonon_bands.py` | Standalone phonon band calculation for diamond primitive cell using pyBall MMFF force constants. Builds supercell Hessian, Bloch-phase sum to D(k), diagonalizes. CLI: `--supercell`, `--q-path`. |
-| `export_phonon_bands.py` | Export multi-method bands to single text file |
-| `experimental_phonon_data.json` | Reference INS data points (Si & diamond) |
+### Modular pipeline (preferred)
 
-### Deprecated Files
+- **phonon_utils.py** — `PhononCalculator`, q-path handling, force-constant caching by structure hash
+- **phonon_backends.py** — `DFTBBackend`, `LAMMPSBackend`, `MMFFBackend` force calculators
+- **run_phonon.py** — CLI: compute bands (`--method`, `--supercell`, `--q-path-file` / `--q-path-auto`)
+- **plot_phonon_comparison.py** — overlay multiple `.npz` band results with q-path validation
+- **plot_bz_paths_3d.py** — 3D Brillouin-zone path visualization
+- **export_phonon_html.py** — interactive HTML band comparison viewer
+- **export_phonon_bands_json.py** — JSON export for web viewer
+- **fit_mmff_phonon.py** / **grid_fit_mmff_phonon.py** — scale MMFF stiffness to match reference phonons
+- **relax_dftb.py** — equilibrate lattice constant before phonon supercell build
+- **test_diamond_phonon_bands.py** — standalone diamond bands via pyBall MMFF Bloch sum
 
-| File | Status |
-|------|--------|
-| `run_phonon.py.bak` | Backup of original run_phonon.py (can delete) |
-| `plot_phonon_comparison copy.py` | Duplicate (can delete) |
-| `plot_comparison.py` | Superseded by plot_phonon_comparison.py |
-| `plot_mp_diamond.py` | Superseded by plot_phonon_comparison.py |
+### Legacy ALAMODE / phonopy
 
-## Quick Start
+- **download_phonon_refs.py** — fetch reference bands (Materials Project, phonondb, Mendeley)
+- **setup_alamode_phonon.py** / **run_alamode_phonon.py** — ALAMODE + LAMMPS displacement workflow
+- **setup_dftb_phonon.py** / **run_phonopy_phonon.py** — DFTB+ + phonopy band workflow
+- **plot_phonon_benchmark.py** / **plot_phonons.py** / **plot_alamode_overlay.py** — legacy overlays
+- **export_phonon_bands.py** — multi-method bands → single text file
 
-### Modular Phonon Pipeline (Recommended)
+### Config & reference data
 
-The new modular system (`phonon_utils.py`, `phonon_backends.py`, `run_phonon.py`) provides:
-- **Backend-agnostic**: DFTB+, LAMMPS, or MMFF force calculators via pluggable backends
-- **Caching**: Force constants cached by hash; only recomputed if structure/backend changes
-- **Flexible q-paths**: Load from file (`--q-path-file`) or auto-generate (`--q-path-auto`)
-- **Metadata**: Computed results save structure_file, method, program, basis_set for plotting
+- **phonon_config.json** / **phonon_config_pbc.json** / **phonon_config.template.json** — tool and potential paths
+- **phonons_ref.md** / **phonons_fitting.md** / **MMFF_phonon_PBC_report.md** / **GIT_NOTES.md** — notes
+- **diamond_fcc_path.dat** / **Si_qpath_ref.dat** / **plots/** — q-path and plot artifacts
 
-#### Compute phonon bands
+---
+
+## Quick Start (modular pipeline)
 
 ```bash
 # Primitive cell with Tersoff potential, auto-generated FCC path
@@ -293,177 +280,9 @@ cross-section data, though phonon dispersions are primarily in the literature).
 
 ---
 
-# Molecular Vibrational Spectra (tSiNCs)
+## Molecular vibrations
 
-A consolidated caching and computation pipeline for molecular vibrational spectra using PySCF (analytical Hessian) and DFTB+ (finite-difference Hessian via ASE). Designed to avoid scattered JSON cache files and produce clean, reusable outputs.
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `../tSiNCs/vib_utils.py` | Core library: calculators, optimization, Hessian extraction, mode export |
-| `../tSiNCs/run_vib_spectra.py` | Main runner: selects molecule & methods, orchestrates caching, exports modes, generates overlay plots |
-| `../tSiNCs/plot_vib_spectra.py` | Standalone overlay plotter (auto-discovers cached `.npy` files) |
-
-## Supported Methods
-
-| Method | Calculator | Hessian source | Cost |
-|--------|-----------|----------------|------|
-| `pyscf_b3lyp` | PySCF B3LYP/cc-pVDZ | Analytical (exact) | High (O(N⁴) per gradient) |
-| `dftb_mio` | DFTB+ `mio-1-1` SK | ASE finite-difference | Very low |
-| `dftb_3ob` | DFTB+ `3ob-3-1` SK | ASE finite-difference | Very low |
-| `dftb_matsci` | DFTB+ `matsci-0-3` SK | ASE finite-difference | Very low |
-| `dftb_pbc` | DFTB+ `pbc-0-3` SK | ASE finite-difference | Very low |
-
-### DFTB+ Slater-Koster sets
-
-The DFTB+ calculator expects SK files under `/home/prokop/SIMULATIONS/dftbplus/slakos/`:
-- `mio-1-1/` — organic molecules (C, H, N, O, S)
-- `3ob-3-1/` — improved organic/organo-metallic parameters
-- `matsci-0-3/` — materials science (Si, C, …)
-- `pbc-0-3/` — periodic/bulk parameters
-
-If your SK directory differs, edit `SK_PATHS` in `vib_utils.py`.
-
-## How It Works
-
-### 1. Consolidated caching (no scattered JSON)
-
-ASE's `Vibrations` class normally writes hundreds of small `cache.*.json` files to disk. Our pipeline:
-1. Redirects ASE displacement data to a **temporary directory** (`/tmp/asevib_*`)
-2. Extracts the Hessian matrix (`vib.H`) and frequencies immediately after the run
-3. Saves them as single binary `.npy` files
-4. **Deletes the temp directory** — no scattered files remain
-
-On cache reload, modes are reconstructed directly from the saved Hessian using mass-weighted diagonalization (`_modes_from_hessian_ase`), eliminating any dependency on ASE's JSON cache.
-
-### 2. PySCF analytical Hessian
-
-PySCF does not need finite differences. The pipeline:
-1. Optimizes geometry via ASE BFGS (using a thin `PySCFCalc` wrapper that calls PySCF gradients)
-2. Builds a fresh PySCF `mol`/`mf` at the optimized geometry
-3. Computes `mf.Hessian().kernel()` — fully analytical
-4. Extracts frequencies and normal modes via `pyscf.hessian.thermo.harmonic_analysis`
-
-### 3. Output formats
-
-For every `(molecule, method)` combination, the pipeline produces:
-
-| File | Format | Contents |
-|------|--------|----------|
-| `<mol>_<method>_relaxed.xyz` | XYZ | Optimized geometry |
-| `<mol>_<method>_hessian.npy` | NumPy binary | `(3N, 3N)` Hessian matrix |
-| `<mol>_<method>_freq.npy` | NumPy binary | Complex frequency array `(3N,)` in cm⁻¹ |
-| `<mol>_<method>_modes.txt` | ASCII | Human-readable mode table (freq + displacement vectors) |
-| `<mol>_<method>_all_modes.xyz` | Multi-frame XYZ | All real modes as displaced geometries (view in Jmol/VMD) |
-| `<mol>_vib_overlay.png` | PNG | Stick + Gaussian-broadened overlay spectra |
-
-## Usage
-
-### Compute vibrational spectra
-
-```bash
-cd ../tSiNCs
-
-# Small molecules (fast — includes PySCF)
-python run_vib_spectra.py CH4 --workdir results --plot
-python run_vib_spectra.py SiH4 --workdir results --plot
-
-# Larger molecules (DFTB+ only by default; add --methods for PySCF)
-python run_vib_spectra.py adamantane --workdir results --plot
-python run_vib_spectra.py Si10_H --workdir results --plot
-
-# Force PySCF on larger molecules (long — ~30–60 min each)
-python run_vib_spectra.py adamantane --methods pyscf_b3lyp --workdir results --plot
-```
-
-The `--workdir` flag controls where all cached `.npy`/`.xyz`/`.txt`/`.png` files are written.
-
-### Plot cached results
-
-`plot_vib_spectra.py` auto-discovers cached `.npy` files — no hardcoded method lists:
-
-```bash
-python plot_vib_spectra.py CH4 --workdir results --xmax 3500
-python plot_vib_spectra.py adamantane --workdir results --xmax 3200
-python plot_vib_spectra.py Si10_H --workdir results --xmax 2200 --noshow
-```
-
-### Load cached data programmatically
-
-```python
-import numpy as np
-
-freqs = np.load('results/CH4_pyscf_b3lyp_cc-pVDZ_freq.npy')
-hess  = np.load('results/CH4_pyscf_b3lyp_cc-pVDZ_hessian.npy')
-# freqs is complex: imag part → imaginary modes (rotation/translation)
-real_freqs = freqs[freqs.imag == 0].real
-```
-
-## Known Issues & Fixes
-
-### DFTB+ `results.tag` parsing bug
-
-ASE's DFTB calculator fails when parsing `results.tag` eigenvalue blocks with wrapped lines. Fixed by monkey-patching `calc.read_eigenvalues = lambda: None` in `make_dftb_calc` — eigenvalues are not needed for force/energy calculations.
-
-### Missing `ase.calculators.pyscf`
-
-ASE does not ship a PySCF calculator. We provide a minimal `PySCFCalc` class in `vib_utils.py` that wraps `pyscf.grad.rks.Gradients` (or `rhf.Gradients` for HF) and returns forces as `-gradient`.
-
-### mol2 format
-
-ASE cannot read `.mol2` natively. `run_vib_spectra.py` includes a `read_mol2()` helper that uses OpenBabel to convert to XYZ before loading.
-
-## Results
-
-### CH₄ (5 atoms)
-
-| Method | Modes | Frequencies (cm⁻¹) |
-|--------|-------|-------------------|
-| **PySCF B3LYP/cc-pVDZ** | 9 | 1309 (×3), 1531 (×2), 3030, 3152 (×3) |
-| **DFTB+ mio-1-1** | 9 | 1323 (×3), 1503 (×2), 2956, 3157 (×3) |
-| **DFTB+ 3ob-3-1** | 9 | 1296 (×3), 1475 (×2), 2860, 3050 (×3) |
-
-PySCF and mio-1-1 agree within ~5 % on stretch frequencies; 3ob-3-1 underestimates C–H stretches by ~3–4 %.
-
-### SiH₄ (5 atoms)
-
-| Method | Modes | Frequencies (cm⁻¹) |
-|--------|-------|-------------------|
-| **PySCF B3LYP/cc-pVDZ** | 9 | 908 (×3), 971 (×2), 2205, 2217 (×3) |
-| **DFTB+ matsci-0-3** | 9 | 775 (×3), 881 (×2), 2205, 2210 (×3) |
-| **DFTB+ pbc-0-3** | 9 | 740 (×3), 878 (×2), 2162, 2171 (×3) |
-
-DFTB+ Si–H stretches are within ~1–2 % of PySCF, but bending modes are underestimated by ~15–20 %.
-
-### Adamantane C₁₀H₁₆ (26 atoms)
-
-| Method | Modes | Low (cm⁻¹) | Mid (cm⁻¹) | C–H stretch (cm⁻¹) |
-|--------|-------|-----------|-----------|-------------------|
-| **DFTB+ mio-1-1** | 72 | 314–1455 | 2889–2995 | 2900–3000 |
-| **DFTB+ 3ob-3-1** | 72 | 308–1433 | 2919–3002 | 2920–3002 |
-
-PySCF B3LYP/cc-pVDZ was attempted but killed after ~80 s/gradient — estimated total time ~30–60 min. Rerun with `python run_vib_spectra.py adamantane --methods pyscf_b3lyp` if needed.
-
-### Si₁₀H₁₆ (26 atoms)
-
-| Method | Modes | Low (cm⁻¹) | Si–H stretch (cm⁻¹) |
-|--------|-------|-----------|-------------------|
-| **DFTB+ matsci-0-3** | 72 | 86–1449 | 2051–2088 |
-| **DFTB+ pbc-0-3** | 72 | 77–832 | 1995–2050 |
-
-Both SK sets agree within ~2 % on Si–H stretches; pbc-0-3 produces slightly softer low-frequency modes.
-
-## Performance Notes
-
-| Molecule | N_atoms | PySCF B3LYP/cc-pVDZ (grad) | DFTB+ (full vib) |
-|----------|---------|---------------------------|-----------------|
-| CH₄ | 5 | ~3 s | ~10 s |
-| SiH₄ | 5 | ~4 s | ~10 s |
-| Adamantane | 26 | ~98 s | ~2 min |
-| Si₁₀H₁₆ | 26 | not timed (killed) | ~2 min |
-
-PySCF scales steeply with system size; for >15 atoms consider running overnight or using a cheaper basis (e.g., `sto-3g` for quick tests). DFTB+ remains fast enough for interactive use up to ~50 atoms.
+See [`../tSiNCs/README.md`](../tSiNCs/README.md) for gas-phase Hessians (PySCF, DFTB+, MMFF) via `vib_spectra.py`.
 
 ---
 

@@ -1,9 +1,8 @@
-# PySCF Fukui Function Calculations — Cluster Package
+# pyscf_fukui_cluster
 
-Self-contained folder for computing electron density and Fukui functions
-(f+, f-, f0) for isolated molecules using PySCF with Gaussian basis sets.
+Self-contained PySCF (Gaussian def2-SVP/PBE) Fukui package — baked N/N±1 single-point scripts, PBS submission, and post-processing. CO scan jobs are generated from sibling `gpaw_fukui_cluster/generate_CO_scan_jobs.py --pyscf`.
 
-Uses **def2-SVP** (double-zeta) basis set and **PBE** functional by default.
+Parent: [`../README.md`](../README.md) · Library baking: `py.tasks.bake_jobs`
 
 ## Contents
 
