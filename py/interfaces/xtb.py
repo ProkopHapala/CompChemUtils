@@ -111,6 +111,17 @@ class XTBBBackend(CalculationBackend):
             apos, es = geom
         return apos, es
 
+    def _atomic_numbers(self, es):
+        import numpy as np
+        from .. import elements as el
+        numbers = []
+        for e in es:
+            sym = str(e)
+            if sym not in el.ELEMENT_DICT:
+                raise ValueError(f"XTBBBackend: unknown element {sym!r} (strip dummy E atoms before xTB)")
+            numbers.append(el.ELEMENT_DICT[sym][0])
+        return np.array(numbers, dtype=np.int32)
+
     def _write_xyz(self, apos, es, fname):
         from py import atomicUtils as au
         au.saveXYZ(es, apos, fname)
@@ -119,8 +130,7 @@ class XTBBBackend(CalculationBackend):
     def _tblite_calc(self, apos, es):
         import numpy as np
         import tblite.interface as tb
-        from .. import elements as el
-        numbers = np.array([el.ELEMENTS.index(e) + 1 for e in es], dtype=np.int32)
+        numbers = self._atomic_numbers(es)
         pos_bohr = np.array(apos) / 0.52917721090380  # Å → Bohr
         calc = tb.Calculator(self.method, numbers, pos_bohr, charge=self.charge, uhf=self.uhf)
         return calc
@@ -135,16 +145,15 @@ class XTBBBackend(CalculationBackend):
     def _tblite_relax(self, geom, fmax=0.05, maxsteps=200, **kw):
         import numpy as np
         from tblite.interface import Calculator
-        from .. import elements as el
         apos, es = self._to_arrays(geom)
-        numbers = np.array([el.ELEMENTS.index(e) + 1 for e in es], dtype=np.int32)
+        numbers = self._atomic_numbers(es)
         pos_bohr = np.array(apos) / 0.52917721090380
         calc = Calculator(self.method, numbers, pos_bohr, charge=self.charge, uhf=self.uhf)
         # tblite does not have native optimizer; use ASE
         from ase import Atoms
         atoms = Atoms(symbols=es, positions=apos)
-        from tblite.ase import TBlite
-        atoms.calc = TBlite(method=self.method, charge=self.charge, uhf=self.uhf)
+        from tblite.ase import TBLite
+        atoms.calc = TBLite(method=self.method, charge=self.charge, uhf=self.uhf)
         from ase.optimize import BFGS
         BFGS(atoms).run(fmax=fmax, steps=maxsteps)
         apos_out = np.array(atoms.positions)

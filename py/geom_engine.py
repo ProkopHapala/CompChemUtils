@@ -2,6 +2,7 @@
 
 import os
 import json
+import copy
 from dataclasses import dataclass, field
 from typing import List, Optional
 import numpy as np
@@ -952,3 +953,133 @@ def validate_geometry(geom, ref_geom=None,
             raise ValueError( f"Atom {i_max}({es[i_max]}) displaced by {max_d:.2f} Å > limit={max_atom_displacement} Å vs reference geometry" )
 
     return True
+
+
+# ============================================================= #
+#  H-bond dimer construction (e-pair oriented monomers)          #
+# ============================================================= #
+
+def strip_epairs(mol):
+    """Remove dummy electron-pair (E) atoms from an AtomicSystem."""
+    to_rm = [i for i, e in enumerate(mol.enames) if e == 'E']
+    if to_rm:
+        mol.delete_atoms(to_rm)
+    return mol
+
+
+def _donor_h_index(mol, i_host, toward_axis):
+    """H neighbor of host whose X-H vector is most aligned with toward_axis."""
+    toward = np.asarray(toward_axis, dtype=np.float64)
+    toward = toward / np.linalg.norm(toward)
+    best_i, best_dot = None, -1e9
+    for j in mol.ngs[i_host]:
+        if mol.enames[j] != 'H':
+            continue
+        v = mol.apos[j] - mol.apos[i_host]
+        v = v / np.linalg.norm(v)
+        d = float(np.dot(v, toward))
+        if d > best_dot:
+            best_dot, best_i = d, j
+    if best_i is None:
+        raise ValueError(f"No H donor bonded to host atom {i_host} ({mol.enames[i_host]})")
+    return best_i
+
+
+def _rotate_frame_z_to_target(mol, target_axis, up_hint):
+    """Rotate coordinates in-place so +Z maps to target_axis (orthogonal matrix)."""
+    z = np.array([0.0, 0.0, 1.0])
+    t = np.asarray(target_axis, dtype=np.float64)
+    t = t / np.linalg.norm(t)
+    if np.linalg.norm(t - z) < 1e-6:
+        return
+    if np.linalg.norm(t + z) < 1e-6:
+        R = au.makeRotMatAng(np.pi, ax=(0, 2))  # 180° about Y: +Z -> -Z
+        au.mulpos(mol.apos, R)
+        return
+    ref = np.array([1.0, 0.0, 0.0]) if abs(t[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    R = au.makeRotMat(t, ref)
+    au.mulpos(mol.apos, R)
+
+
+def _align_monomer_lp(mol, i_host, lp_sign=1.0):
+    """Orient monomer in-place: host lone pair along lp_sign * Z; host at origin."""
+    if mol.ngs is None:
+        mol.neighs(bBond=True)
+    origin, fw, up, _ = _mol_frame_from_epairs(mol, i_host)
+    lp = -fw
+    align = lp if lp_sign > 0 else -lp
+    M = au.makeRotMat(align, up)
+    mol.orient_mat(M, p0=origin)
+    strip_epairs(mol)
+    return mol
+
+
+def _align_monomer_donor_h(mol, i_host, h_axis):
+    """Orient monomer in-place: donor O->H vector along h_axis (H points toward acceptor lp)."""
+    if mol.ngs is None:
+        mol.neighs(bBond=True)
+    origin, fw, up, _ = _mol_frame_from_epairs(mol, i_host)
+    strip_epairs(mol)
+    mol.neighs(bBond=True)
+    ax = np.asarray(h_axis, dtype=np.float64)
+    ax = ax / np.linalg.norm(ax)
+    i_h = _donor_h_index(mol, i_host, ax)
+    v = mol.apos[i_h] - mol.apos[i_host]
+    M = au.makeRotMat(v, up)
+    mol.orient_mat(M, p0=origin)  # v -> +Z
+    _rotate_frame_z_to_target(mol, ax, up)  # +Z -> h_axis (incl. -Z toward acceptor lp)
+    return mol
+
+
+def build_hbond_dimer(mol_xyz, mol2_xyz=None, host=None, separation=2.9, axis=(0.0, 0.0, 1.0), preferred=('O', 'N')) -> AtomicSystem:
+    """Build an H-bonded dimer from one or two XYZ monomers using e-pair orientation.
+
+    Monomer A (acceptor): host lone pair along +axis.
+    Monomer B (donor): donor X-H bond along -axis, host translated by separation * axis.
+    For homodimers pass only mol_xyz; for heterodimers pass mol2_xyz as the second monomer file.
+
+    Parameters
+    ----------
+    mol_xyz    : path to first monomer XYZ (acceptor side)
+    mol2_xyz   : path to second monomer XYZ; None → same as mol_xyz (homodimer)
+    host       : host element for lone-pair frame ('O', 'N', ...); None → first O then N
+    separation : center-to-center shift of monomer B along axis (Å)
+    axis       : H-bond axis unit vector (monomer A lone pair points +axis)
+    preferred  : host element search order when host is None
+    """
+    preferred_hosts = (host,) if host else preferred
+    path_b = mol2_xyz if mol2_xyz is not None else mol_xyz
+
+    def _prepare(path):
+        m = AtomicSystem(fname=path)
+        m.neighs(bBond=True)
+        m.preinitialize_atomic_properties()
+        i_host, _ = _find_host_atom(m, preferred=preferred_hosts)
+        return m, i_host
+
+    mol_a, i_host_a = _prepare(mol_xyz)
+    mol_b, i_host_b = _prepare(path_b)
+
+    ax = np.asarray(axis, dtype=np.float64)
+    nax = np.linalg.norm(ax)
+    if nax < 1e-12:
+        raise ValueError(f"build_hbond_dimer(): axis vector has zero length: {axis}")
+    ax = ax / nax
+    z = np.array([0.0, 0.0, 1.0])
+
+    _align_monomer_lp(mol_a, i_host_a, lp_sign=+1.0)
+    _align_monomer_donor_h(mol_b, i_host_b, h_axis=-z)
+
+    if np.linalg.norm(ax - z) > 1e-6:
+        _rotate_frame_z_to_target(mol_a, ax, np.array([1.0, 0.0, 0.0]))
+        _rotate_frame_z_to_target(mol_b, -ax, np.array([1.0, 0.0, 0.0]))
+
+    mol_b.apos += ax[None, :] * float(separation)
+
+    dimer = copy.deepcopy(mol_a)
+    dimer.addSystems(mol_b)
+    dimer.natoms = len(dimer.apos)
+    dimer.enames = list(dimer.enames)
+    dimer.qs = dimer.Rs = None
+    dimer.neighs(bBond=True)
+    return dimer

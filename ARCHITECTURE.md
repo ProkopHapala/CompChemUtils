@@ -40,7 +40,7 @@ See [`py/README.md`](py/README.md) for the full file list.
 
 **`AtomicSystem.py`** — canonical geometry container (`apos`, `enames`, `atypes`, PBC, bonds); file I/O (XYZ, MOL, MOL2, GEN); selection, rotation, neighbor lists, `clonePBC()`.
 
-**`geom_engine.py`** — program-agnostic constraints (`GeomConstraint`, `freeze_atoms`, `fix_distance`, …); adsorption placement (`place_molecule_on_edge`, `auto_edge_placement`); attach movies; `validate_geometry()`.
+**`geom_engine.py`** — program-agnostic constraints (`GeomConstraint`, `freeze_atoms`, `fix_distance`, …); adsorption placement (`place_molecule_on_edge`, `auto_edge_placement`); H-bond dimer assembly from e-pair oriented monomers (`build_hbond_dimer`, `strip_epairs`); attach movies; `validate_geometry()`.
 
 **`atomicUtils.py`** — low-level primitives used by `AtomicSystem` and `geom_engine`: loaders, bond/H-bond detection, angles/dihedrals, orientation frames, fragment assembly.
 
@@ -83,7 +83,8 @@ def vibrations(geom, backend, method, basis=None,
 **`scan.py`** — Rigid and relaxed scans
 - `rigid_scan()`: pre-compute frames, evaluate energy per frame (parallelizable)
 - `relaxed_scan()`: step-by-step with constraints, uses `step_callback` for geometry ops
-- `make_scan_grid()`: non-uniform distance grid (fine near contact, coarse far)
+- `make_scan_grid()`: non-uniform adsorption distance grid (fine near contact, coarse far)
+- `make_scan_grid_geometric()`: dissociation curve grid — fine 0.1 Å near r_eq, geometric coarsening, then 1 Å / 5 Å steps to r_max
 - `make_rigid_shift_frames()`: generate frames by translating fragment
 
 **`interaction_energy.py`** — E_int = E_whole - E_frag1 - E_frag2
@@ -385,6 +386,30 @@ bake_fukui_jobs(
 # python3 -m py.cluster.interactive_job JOBID
 # → job_env.json, job_env.sh, compute node hostname printed
 ```
+
+### Pattern 9: H-bond dimer build, relax, and rigid distance scan
+```python
+from py.geom_engine import build_hbond_dimer
+from py.interfaces.xtb import XTBBBackend
+from py.tasks.relax import relax
+from py.tasks.scan import make_scan_grid_geometric, make_rigid_shift_frames, rigid_scan
+import numpy as np
+
+# Monomer XYZ needs e-pair (E) dummy atoms — see examples/add_epairs.py
+dimer = build_hbond_dimer('data/xyz/H2O.xyz', separation=2.9)  # E stripped inside
+backend = XTBBBackend(method='GFN2-xTB')
+rel = relax(dimer, backend, method='GFN2-xTB', mode='local')
+rel.geom.saveXYZ('tmp/H2O_dimer_xtb/relaxed.xyz', bQs=False)
+
+# Rigid acceptor-O ··· donor-O scan (indices from dimer layout — see scan_dimer._dimer_indices)
+i_acc, i_don = 0, rel.geom.natoms // 2
+r_eq = float(np.linalg.norm(rel.geom.apos[i_don] - rel.geom.apos[i_acc]))
+grid = make_scan_grid_geometric(r_eq)
+frames = make_rigid_shift_frames(rel.geom, i_acc, i_don, grid, mobile_indices=list(range(i_don, rel.geom.natoms)))
+rigid_scan(frames, backend, method='GFN2-xTB', mode='local')
+```
+
+Thin CLIs with outputs (`start.xyz`, `relaxed.xyz`, `scan.dat`, `scan.png`): [`examples/hbond/`](examples/hbond/README.md). DFTB+: set `sk_dir` in `machine_config.yaml`; use `--method-dftb none` for plain SCC when the binary lacks s-dftd3.
 
 ---
 

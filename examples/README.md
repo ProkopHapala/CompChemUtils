@@ -8,6 +8,7 @@ Runnable workflows and study scripts — thin CLIs on top of `py/` (geometry, ta
 
 | Topic | Path | README |
 |-------|------|--------|
+| H-bond dimer build + relax (xTB, DFTB+) | `hbond/` | [`hbond/README.md`](hbond/README.md) |
 | Metal tip + anhydride adsorption | `AgTip_CarboxAnhydride_bonds/` | [`AgTip_CarboxAnhydride_bonds/README.md`](AgTip_CarboxAnhydride_bonds/README.md) |
 | DFTB+ scans, orbitals, waveplot | `dftb/` | [`dftb/README.md`](dftb/README.md) |
 | Fukui functions (GPAW, PySCF, metals) | `fukui/` | [`fukui/README.md`](fukui/README.md) |

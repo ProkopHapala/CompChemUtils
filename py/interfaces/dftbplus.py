@@ -124,7 +124,9 @@ class DFTBPlusBackend(CalculationBackend):
         if self.temperature > 0:
             p['Hamiltonian_Filling'] = f'Fermi {{ Temperature [Kelvin] = {self.temperature} }}'
         if self.method in ('D3', 'D3H5'):
-            p['Hamiltonian_Dispersion'] = 'DftD3 { Damping = BeckeJohnson {} }'
+            p['Hamiltonian_Dispersion'] = (
+                'DftD3 { Damping = BeckeJohnson { a1 = 0.5719 a2 = 3.6017 } s6 = 1.0 s8 = 0.5883 }'
+            )
         # K-points
         if self.kpts is not None:
             kp = self.kpts if isinstance(self.kpts, tuple) else tuple(self.kpts)
@@ -132,6 +134,46 @@ class DFTBPlusBackend(CalculationBackend):
         if self.maxiter != 250:
             p['Hamiltonian_MaxSccIterations'] = str(self.maxiter)
         return p
+
+    def _dftb_cmd(self) -> str:
+        """Resolve DFTB+ executable: machine_config → DFTB_EXE env → PATH."""
+        import shutil
+        exe = None
+        try:
+            from .. import config_loader as cfg
+            exe = cfg.get('tools.dftb_bin')
+        except Exception:
+            pass
+        if not exe:
+            exe = os.environ.get('DFTB_EXE')
+        if not exe:
+            exe = 'dftb+'
+        if os.path.isfile(exe):
+            return exe
+        found = shutil.which(exe)
+        if found:
+            return found
+        raise RuntimeError(
+            f"DFTB+ executable not found ({exe!r}). "
+            f"Set tools.dftb_bin in machine_config.yaml or DFTB_EXE."
+        )
+
+    def _dftb_subproc_env(self) -> dict:
+        """Subprocess env; static fork binary needs no mixed dev-build LD_LIBRARY_PATH."""
+        env = os.environ.copy()
+        exe = self._dftb_cmd()
+        # Static in-tree binary (git/dftbplus/_build) — drop polluted LD_LIBRARY_PATH
+        if '/git/dftbplus/_build/' in exe:
+            env.pop('LD_LIBRARY_PATH', None)
+            return env
+        lib = os.environ.get('DFTB_LIB_PATH')
+        if lib and os.path.isfile(lib):
+            env['LD_LIBRARY_PATH'] = os.path.dirname(lib)
+        else:
+            libdir = os.path.normpath(os.path.join(os.path.dirname(exe), '..', 'lib'))
+            if os.path.isdir(libdir):
+                env['LD_LIBRARY_PATH'] = libdir
+        return env
 
     # ---- local execution (requires ASE + dftbplus installed)
     def run_energy(self, geom, method=None, basis=None, **kw) -> float:
@@ -145,7 +187,7 @@ class DFTBPlusBackend(CalculationBackend):
         try:
             self._write_hsd(atoms, os.path.join(wd, 'dftb_in.hsd'), driver=None)
             self._write_gen(atoms, os.path.join(wd, 'geo.gen'))
-            r = subprocess.run(['dftb+'], cwd=wd, capture_output=True, text=True)
+            r = subprocess.run([self._dftb_cmd()], cwd=wd, capture_output=True, text=True, env=self._dftb_subproc_env())
             if r.returncode != 0:
                 raise RuntimeError(f"DFTB+ SP failed:\n{r.stderr[-400:]}")
             # Parse total energy from detailed.out (line: "Total energy: ... <E_Ha> H <E_eV> eV")
@@ -212,10 +254,16 @@ class DFTBPlusBackend(CalculationBackend):
             self._write_gen(atoms, gen_path)
 
             # Run DFTB+
-            result = subprocess.run(['dftb+'], cwd=wd, capture_output=True, text=True)
+            result = subprocess.run([self._dftb_cmd()], cwd=wd, capture_output=True, text=True, env=self._dftb_subproc_env())
             if result.returncode != 0:
-                print(f"DFTB+ stderr:\n{result.stderr}")
-                raise RuntimeError(f"DFTB+ failed with code {result.returncode}")
+                err = (result.stderr or '') + (result.stdout or '')
+                if 'without support for s-dftd3' in err:
+                    raise RuntimeError(
+                        "DFTB+ was built without s-dftd3; D3/D3H5 dispersion unavailable.\n"
+                        "Rebuild DFTB+ with s-dftd3, or use --method-dftb none (plain SCC-DFTB).\n"
+                        f"stderr tail:\n{result.stderr[-600:]}"
+                    )
+                raise RuntimeError(f"DFTB+ failed with code {result.returncode}\n{result.stderr[-600:]}")
 
             # Read optimized geometry from geo_end.gen
             if os.path.exists(os.path.join(wd, 'geo_end.gen')):
@@ -247,7 +295,7 @@ class DFTBPlusBackend(CalculationBackend):
         fname = os.path.join(wd, 'dftb_in.hsd')
         self._write_hsd(atoms, fname, driver='SecondDerivatives',
                          delta=kw.get('delta', 1e-4))
-        subprocess.run(['dftb+'], cwd=wd, check=True)
+        subprocess.run([self._dftb_cmd()], cwd=wd, check=True, env=self._dftb_subproc_env())
         # Parse hessian.out
         from .. import dftb_utils as dftbu  # may not exist in this repo
         # Fallback: read binary / text hessian.out directly
@@ -367,7 +415,12 @@ class DFTBPlusBackend(CalculationBackend):
                     f.write(f"  Filling = Fermi {{ Temperature [Kelvin] = {self.temperature} }}\n")
                 if self.method in ('D3', 'D3H5'):
                     f.write("  Dispersion = DftD3 {\n")
-                    f.write("    Damping = BeckeJohnson {}\n")
+                    f.write("    Damping = BeckeJohnson {\n")
+                    f.write("      a1 = 0.5719\n")
+                    f.write("      a2 = 3.6017\n")
+                    f.write("    }\n")
+                    f.write("    s6 = 1.0\n")
+                    f.write("    s8 = 0.5883\n")
                     f.write("  }\n")
                 if self.kpts is not None:
                     kp = self.kpts if isinstance(self.kpts, tuple) else tuple(self.kpts)

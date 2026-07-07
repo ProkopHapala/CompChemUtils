@@ -1,6 +1,10 @@
 # dftb
 
-DFTB+ examples: rigid/relaxed scans, fragment jobs, orbital/density visualization, and low-level API tests. Most scripts use legacy `pyBall.dftb_utils`; newer work should use `py.interfaces.dftbplus`.
+DFTB+ examples: rigid/relaxed scans, fragment jobs, orbital/density visualization, and low-level API tests.
+
+**Three layers:** `py.interfaces.dftbplus` (subprocess backend) · `py.dftb.DFTBcore` (in-process SCF + matrices) · `py.dftb.Grid_dftb` (OpenCL `LCAO_grid.cl` / `LCAO_STM.cl`). See `py/dftb/README.md` and `machine_config.yaml`.
+
+Legacy scripts use `pyBall.DFTB.*` (FireCore on `PYTHONPATH`). New grid/STM code: `from py.dftb import DFTBcore, GridProjector`.
 
 - **dftb.py** — batch parallel DFTB+ relax driver over a workdir of inputs (legacy `pyBall` + subprocess)
 - **dftb_scan.py** — 1D rigid scan via `FFFit.linearScan` + DFTB+ single-points

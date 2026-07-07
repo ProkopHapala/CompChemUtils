@@ -4,7 +4,7 @@ Backend-agnostic orchestration of QC calculation types — dispatches to `Calcul
 
 - **base.py** — result dataclasses only (`RelaxResult`, `ScanResult`, `VibResult`, `FukuiResult`, `PhononResult`, `InteractionEnergyResult`)
 - **relax.py** — geometry optimization entry point (`relax`, modes `local`/`export`)
-- **scan.py** — rigid and relaxed coordinate scans, non-uniform adsorption grids (`make_scan_grid`, `make_rigid_shift_frames`, `rigid_scan`, `relaxed_scan`)
+- **scan.py** — rigid and relaxed coordinate scans; distance grids (`make_scan_grid` for adsorption, `make_scan_grid_geometric` for H-bond dissociation curves); frame generation and evaluation (`make_rigid_shift_frames`, `rigid_scan`, `relaxed_scan`)
 - **vibrations.py** — harmonic frequency/mode workflow (`vibrations`)
 - **interaction_energy.py** — fragment-based binding energy, E_int = E_whole − E_frag1 − E_frag2, optional per-fragment relaxation
 - **bake_jobs.py** — generic Fukui cluster job baker: XYZ ingest, charge-state loops (N/N±1), PBS scripts, backend-specific run-script callbacks (`bake_fukui_jobs`, `bake_pbs`)

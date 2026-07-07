@@ -1,43 +1,56 @@
 # ==================================================================
 #  CompChemUtils — machine-specific configuration
 # ==================================================================
-#  COPY this file to machine_config.yaml (same directory) and fill
-#  in your local paths.  machine_config.yaml is git-ignored.
+#  COPY this file to machine_config.yaml (repo root) and fill in paths.
+#  machine_config.yaml is git-ignored.
 #
 #  Paths support ~ (home) and $VAR (environment variables).
+#
+#  DFTB+ has THREE layers (do not confuse them):
+#    1. tools.dftb_bin          — subprocess `dftb+` (relax, phonons, batch jobs)
+#    2. dftb.libdftbcore        — ctypes in-process SCF + matrix export (py.dftb.DFTBcore)
+#    3. py/dftb/kernels/*.cl    — OpenCL grid/STM projection (in-repo, no path needed)
+#
+#  Typical fork layout:
+#    ~/git/dftbplus/_build/app/dftb+/dftb+     → tools.dftb_bin (dev binary)
+#    ~/opt/dftbplus/lib/libdftbcore.so         → dftb.libdftbcore (until _build target built)
+#    ~/SIMULATIONS/dftbplus/slakos/            → sk_dir
 # ==================================================================
 
 # ---- External executables (bare name = search PATH) ----
 tools:
-  xtb_bin: xtb              # GFN1/2-xTB, GFN-FF
+  xtb_bin: xtb              # GFN1/2-xTB, GFN-FF (or use pip tblite for GFN1/2 only)
   g_xtb_bin: xtb-gxtb       # g-xTB (transition-metal optimised)
-  dftb_bin: dftb+           # DFTB+ SCC-DFTB
-  lammps_bin: lmp_serial    # LAMMPS MD engine
-  gpaw_command: python -m gpaw
+  dftb_bin: dftb+           # DFTB+ SCC-DFTB subprocess (prefer full path to fork binary)
+  dftb_bin_installed: dftb+ # optional fallback install prefix
+  lammps_bin: lmp_serial
+  gpaw_command: python3 -m gpaw
   phonopy_bin: phonopy
 
-# ---- DFTB+ shared libraries ----
-#  libdftbcore.so is needed by pyBall.DFTB.DFTBcore (ctypes).
-#  It may require LD_LIBRARY_PATH to include local toml-f/tblite
-#  build dirs to avoid undefined-symbol errors.
+# ---- DFTB+ libraries and fork ----
 dftb:
-  libdftbcore: /path/to/libdftbcore.so
-  ld_library_extra:
-    - /path/to/toml-f/origin
-    - /path/to/tblite/origin
+  repo: /path/to/dftbplus/fork
+  libdftbcore: /path/to/libdftbcore.so   # py.dftb.DFTBcore (in-process)
+  libdftbplus: /path/to/libdftbplus.so   # dftbplus pip API (tools/pythonapi)
+  wfc_data_dir: py/dftb/data             # relative to repo root, or absolute path
+  ld_library_extra: []                   # extra dirs for ctypes .so (usually empty)
+
+# ---- Python path roots (legacy; prefer py.dftb in new code) ----
+paths:
+  pyball: /path/to/FireCore    # legacy: pyBall.DFTB.* in old examples
+  dftb_pyball: /path/to/dftbplus
 
 # ---- DFTB+ Slater–Koster files ----
-# All .skf sets (auorg, mio, 3ob, hyb, agch-clust, …) are expected
-# to live in ONE directory.  DFTB+ uses Prefix + "-" + Suffix to
-# locate the files, so mixing multiple sets in a single folder is fine
-# as long as file names do not collide.
-sk_dir: /path/to/all_dftb_slakos
+# Root of slakos tree. Sets live in subdirs: library/3ob-3-1, mio/mio-1-1, auorg/auorg-1-1, …
+# DFTBPlusBackend(sk_path=...) needs the directory containing .skf files for one set.
+sk_dir: /path/to/dftbplus/slakos
 
 # ---- Large external data directories ----
 data_dirs:
   phonondb_dir: /path/to/phononDB_repo
   lammps_potentials: /path/to/lammps/potentials
   mmff_data_dir: /path/to/FireCore/cpp/common_resources
+  fireball_fdata_dir: /path/to/Fireball_Data
 
 # ---- Default PBS / cluster settings ----
 cluster:
