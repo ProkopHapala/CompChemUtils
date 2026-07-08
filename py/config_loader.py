@@ -201,3 +201,17 @@ def require_path(key: str) -> str:
             f"Please fix machine_config.yaml."
         )
     return p
+
+
+def ensure_pyball_path() -> None:
+    """Prepend paths.pyball (and dftb_pyball) from machine_config to sys.path."""
+    import sys
+    for key in ('paths.pyball', 'paths.dftb_pyball'):
+        p = get_path(key)
+        if p and os.path.isdir(p) and p not in sys.path:
+            sys.path.insert(0, p)
+
+
+def dftbcore_lib() -> str:
+    """Path to libdftbcore.so for pyBall.DFTB.DFTBcore."""
+    return require_path('dftb.libdftbcore')

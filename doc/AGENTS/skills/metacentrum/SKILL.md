@@ -20,6 +20,7 @@ MetaCentrum = Czech national HPC grid. Scheduler: **OpenPBS** (NOT Slurm). All j
 ## Hard Rules
 
 - **NEVER run computations on login/frontend nodes.** Always submit via `qsub` or use `qsub -I` for interactive shell on a compute node.
+- **ALWAYS use `#PBS -q luna`** (batch scripts) or `-q luna` (`qsub -I`) — dedicated FZU queue with priority. Without it, jobs go to the default shared queue.
 - **ALWAYS use `$SCRATCHDIR`** for I/O. Copy inputs to scratch at job start, copy outputs back before job ends. Scratch is fast local NVMe; home/storage is slow NFS.
 - **Kerberos tickets expire after ~12h.** If SSH fails, run `kinit` to re-authenticate.
 - **Clean scratch before exit:** `rm -rf $SCRATCHDIR/*` — otherwise data is lost when job ends.
@@ -60,6 +61,7 @@ Job states: `Q` (queued), `R` (running), `E` (exiting), `F` (finished).
 #PBS -l select=1:ncpus=16:mem=64gb:scratch_local=100gb
 #PBS -l walltime=24:00:00
 #PBS -j oe
+#PBS -q luna
 
 trap 'cp -r $SCRATCHDIR/* $PBS_O_WORKDIR/ 2>/dev/null; rm -rf $SCRATCHDIR/*' EXIT
 

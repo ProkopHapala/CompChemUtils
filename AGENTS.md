@@ -21,7 +21,7 @@ We develop rigorous scientific software where debuggability, numerical correctne
 
 ## Rule 3 — Reusable Architecture
 
-- **Inventory First:** Thoroughly review reference source-code files to identify existing functions, modules, and data structures before writing anything from scratch. Use `CODEMAP.md` and `/doc/topical_audit/topical_audit.md` for guidance.
+- **Inventory First:** Thoroughly review reference source-code files to identify existing functions, modules, and data structures before writing anything from scratch. Use [`doc/topical_audit.md`](doc/topical_audit.md) and [`ARCHITECTURE.md`](ARCHITECTURE.md) for guidance.
 - **Orthogonal Architecture:** The Python subsystem (`py/`) follows a strict three-layer orthogonal design:
   1. **Geometry layer** (`AtomicSystem.py`, `geom_engine.py`) — handles all chemistry/geometry operations
   2. **Task layer** (`py/tasks/`) — orchestrates calculation types (relax, scan, vibrations, etc.)
@@ -68,6 +68,6 @@ We develop rigorous scientific software where debuggability, numerical correctne
 
 ## Practical Navigation, Compilation, testing Protocols
 
-- **Repository Navigation:** Review `CODEMAP.md` for structure and build instructions.
+- **Repository Navigation:** Review [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`py/README.md`](py/README.md) for structure; [`doc/topical_audit.md`](doc/topical_audit.md) for cross-topic maps.
 - **Test Location:** Place all test scripts within `/test`.
 - **Automation Scripts:** Use provided `run.sh`/`make.sh` scripts in the test directory; never invoke `make` directly if helpers exist. Run tests from inside the test directory to ensure paths are set.

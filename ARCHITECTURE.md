@@ -3,16 +3,32 @@
 > **ATTENTION LLMs**: Read this before modifying any code. The architecture is deliberately
 > orthogonal: geometry, tasks, and backends are separate. Do NOT mix them.
 
+Per-folder file indexes live in [`py/README.md`](py/README.md) and subdirectory READMEs — use those for navigation; this document covers design rules, backend semantics, and usage patterns.
+
+| Layer | Path | README |
+|-------|------|--------|
+| Geometry / chemistry | `py/` | [`py/README.md`](py/README.md) |
+| Tasks | `py/tasks/` | [`py/tasks/README.md`](py/tasks/README.md) |
+| Backends | `py/interfaces/` | [`py/interfaces/README.md`](py/interfaces/README.md) |
+| Cluster / HPC | `py/cluster/` | [`py/cluster/README.md`](py/cluster/README.md) |
+| Domain builders (ASE) | `py/system_specific/` | [`py/system_specific/README.md`](py/system_specific/README.md) |
+
 ---
 
 ## Core Design Principle
 
 The system is built on **orthogonal separation of concerns**:
-- **Geometry/Chemistry layer** (what to calculate)
-- **Task layer** (what type of calculation)
-- **Backend layer** (which software/method to use)
+- **Geometry/Chemistry layer** (`py/`) — molecular structure, constraints, I/O; no QC software imports
+- **Task layer** (`py/tasks/`) — calculation workflows (relax, scan, vibrations, …); backend-agnostic
+- **Backend layer** (`py/interfaces/`) — wraps QC programs; declares `capabilities`, translates `GeomConstraint`
 
-This allows any task to work with any backend without code duplication.
+Supporting modules sit beside the three layers but must not break the split:
+- **`config_loader.py`** — machine paths/tools from `machine_config.yaml` (never hard-code `/home/...` in source)
+- **`plotUtils.py`**, **`molVisApp.py`** — diagnostics and visualization only; no compute in core libraries
+- **`py/cluster/`** — PBS script generation and interactive-job env capture (Metacentrum)
+- **`py/system_specific/`** — ASE-dependent surface/cluster builders; optional, not imported by tasks
+
+Any task can pair with any backend that declares the required capability.
 
 ---
 
@@ -20,28 +36,27 @@ This allows any task to work with any backend without code duplication.
 
 ### 1. Geometry/Chemistry Layer (`py/`)
 
-**`AtomicSystem.py`** — Core molecular geometry container
-- Stores atomic positions (`apos`), element names (`enames`), atomic types (`atypes`)
-- Handles file I/O (XYZ, MOL, MOL2, GEN formats)
-- Geometry operations: rotation, translation, selection, subset extraction
-- Bond finding, neighbor lists, angle/dihedral detection
-- Periodic boundary conditions: `clonePBC()`, `clonePBC_central()`
-- Methods: `saveXYZ()`, `findBonds()`, `selectSubset()`, `orient()`, `shift()`
+See [`py/README.md`](py/README.md) for the full file list.
 
-**`geom_engine.py`** — Program-agnostic geometric constraints
-- `GeomConstraint` dataclass: freeze atoms, fix distance/angle/dihedral
-- Helper functions: `freeze_atoms()`, `fix_distance()`, `fix_angle()`, `fix_dihedral()`
-- Advanced placement: `place_molecule_on_edge()`, `auto_edge_placement()`
-- Molecule attachment: `generate_ag4_attach_movie()`, `generate_edge_attach_movie()`
-- Validation: `validate_geometry()` for sanity checks
+**`AtomicSystem.py`** — canonical geometry container (`apos`, `enames`, `atypes`, PBC, bonds); file I/O (XYZ, MOL, MOL2, GEN); selection, rotation, neighbor lists, `clonePBC()`.
 
-**`elements.py`** — Periodic table data
-- Element properties: atomic numbers, masses, vdW radii, valence electrons
-- Used by `AtomicSystem` for property initialization
+**`geom_engine.py`** — program-agnostic constraints (`GeomConstraint`, `freeze_atoms`, `fix_distance`, …); adsorption placement (`place_molecule_on_edge`, `auto_edge_placement`); H-bond dimer assembly from e-pair oriented monomers (`build_hbond_dimer`, `strip_epairs`); attach movies; `validate_geometry()`.
+
+**`atomicUtils.py`** — low-level primitives used by `AtomicSystem` and `geom_engine`: loaders, bond/H-bond detection, angles/dihedrals, orientation frames, fragment assembly.
+
+**`elements.py`** — periodic-table lookup (Z, radii, masses, colors, valence electrons).
+
+**`AtomicGraph.py`** — object-graph alternative (`Atom`/`Bond`/`Ring` with stable identity; `to_arrays()` for numpy/vispy).
+
+**`config_loader.py`** — `require_path()`, `get_tool()` against repo-root `machine_config.yaml`.
+
+**`plotUtils.py`** / **`molVisApp.py`** — matplotlib diagnostics and PyQt5+Vispy viewer; keep plotting out of task/backend modules.
 
 ---
 
 ### 2. Task Layer (`py/tasks/`)
+
+See [`py/tasks/README.md`](py/tasks/README.md).
 
 **`base.py`** — Result dataclasses (pure data containers)
 - `RelaxResult`: optimized geometry, energies, convergence status
@@ -68,16 +83,24 @@ def vibrations(geom, backend, method, basis=None,
 **`scan.py`** — Rigid and relaxed scans
 - `rigid_scan()`: pre-compute frames, evaluate energy per frame (parallelizable)
 - `relaxed_scan()`: step-by-step with constraints, uses `step_callback` for geometry ops
-- `make_scan_grid()`: non-uniform distance grid (fine near contact, coarse far)
+- `make_scan_grid()`: non-uniform adsorption distance grid (fine near contact, coarse far)
+- `make_scan_grid_geometric()`: dissociation curve grid — fine 0.1 Å near r_eq, geometric coarsening, then 1 Å / 5 Å steps to r_max
 - `make_rigid_shift_frames()`: generate frames by translating fragment
 
 **`interaction_energy.py`** — E_int = E_whole - E_frag1 - E_frag2
 - Optional relaxation of whole system and/or fragments
 - Supports both local execution and export modes
 
+**`bake_jobs.py`** — backend-agnostic Fukui cluster job baker
+- Reads XYZ geometries, loops charge states (N, N+1, N−1)
+- Writes baked run scripts + PBS submission files via backend-specific callbacks (`bake_fukui_jobs`)
+- Uses `py/cluster/` for PBS generation when submitting arrays
+
 ---
 
 ### 3. Backend Layer (`py/interfaces/`)
+
+See [`py/interfaces/README.md`](py/interfaces/README.md).
 
 **`_base.py`** — Abstract base class for all backends
 ```python
@@ -200,6 +223,28 @@ backend = DFTBPlusBackend(
 
 ---
 
+### 4. Cluster Layer (`py/cluster/`)
+
+See [`py/cluster/README.md`](py/cluster/README.md). Not part of the geometry/task/backend triangle — HPC plumbing only.
+
+- **`ResourceSpec`** — cores, nodes, RAM, walltime, GPU, queue; PBS formatting helpers
+- **`write_pbs_script`**, **`write_array_pbs`** — generate submission scripts from resource spec + commands
+- **`interactive_job.py`** — parse `qstat -f JOBID`, export PBS env to `job_env.json` / `job_env.sh` for SSH sessions on compute nodes
+
+Used by `tasks/bake_jobs.py` and export-mode workflows; does not run QC calculations itself.
+
+---
+
+### 5. Domain-Specific Builders (`py/system_specific/`)
+
+See [`py/system_specific/README.md`](py/system_specific/README.md). ASE-dependent geometry for metals (FCC(111) slabs, adatoms, Ag₄ tips) — kept out of the generic layers so ASE remains optional.
+
+**`MetalTips.py`** — `build_fcc111_adatom()`, lattice constants, edge-pair frames; exports to `AtomicSystem` or ASE `Atoms`.
+
+Overlap with slab helpers in `interfaces/gpaw.py` is intentional: `gpaw.py` targets GPAW workflows; `MetalTips.py` is backend-neutral structure building.
+
+---
+
 ## Method/Basis Parameter Mapping
 
 ### Method strings (backend-specific interpretation):
@@ -230,13 +275,14 @@ backend = DFTBPlusBackend(
 
 ### Pattern 1: Local execution with DFTB+ (3ob set)
 ```python
+from py import config_loader as cfg
 from py.AtomicSystem import AtomicSystem
 from py.interfaces.dftbplus import DFTBPlusBackend
 from py.tasks.relax import relax
 
 geom = AtomicSystem(fname='molecule.xyz')
 backend = DFTBPlusBackend(
-    sk_path='/home/user/SK/3ob-3-1',
+    sk_path=cfg.require_path('sk_dir') + '/3ob-3-1',
     method='D3H5',
     scc=True
 )
@@ -256,6 +302,7 @@ result = relax(geom, backend, method='b3lyp', basis='6-31G*', mode='local')
 
 ### Pattern 3: Export for cluster (Psi4)
 ```python
+from py.AtomicSystem import AtomicSystem
 from py.interfaces.psi4 import Psi4Backend
 from py.tasks.scan import rigid_scan, make_rigid_shift_frames
 
@@ -305,12 +352,64 @@ def step_callback(geom, d):
     # ... apply shift ...
     return geom_copy
 
-result = relaxed_scan(geom, backend, method='gfn2-xtb',
+result = relaxed_scan(geom, backend, method='GFN2-xTB',
                       constraints_fn=constraints_fn,
                       step_callback=step_callback,
                       coord_values=[2.0, 2.5, 3.0],
                       mode='local')
 ```
+
+### Pattern 7: Fukui cluster job baking (PySCF or GPAW)
+```python
+# Backend-specific script template lives in the example generator, not in py/interfaces/.
+# See examples/fukui/pyscf_fukui_cluster/generate_jobs.py and
+#      examples/fukui/gpaw_fukui_cluster/generate_jobs.py
+
+from py.tasks.bake_jobs import bake_fukui_jobs
+
+bake_fukui_jobs(
+    molecules=MOLECULES,          # dict: name -> {natoms, nelec, ncpus, mem, walltime}
+    geom_dir='geometries',
+    out_dir='jobs',
+    bake_run_fn=bake_pyscf_run_script,   # user-supplied callback; see examples
+    results_subdir_fn=results_subdir,
+    job_prefix='pyscf_fukui',
+    module_name='mambaforge',
+    params=dict(basis='def2-SVP', xc='PBE', resolution=0.15, margin=4.0),
+    box_vacuum=None,              # set e.g. 12.0 for GPAW periodic boxing
+)
+```
+
+### Pattern 8: PBS interactive job env for remote SSH
+```python
+# After qsub -I in another terminal:
+# python3 -m py.cluster.interactive_job JOBID
+# → job_env.json, job_env.sh, compute node hostname printed
+```
+
+### Pattern 9: H-bond dimer build, relax, and rigid distance scan
+```python
+from py.geom_engine import build_hbond_dimer
+from py.interfaces.xtb import XTBBBackend
+from py.tasks.relax import relax
+from py.tasks.scan import make_scan_grid_geometric, make_rigid_shift_frames, rigid_scan
+import numpy as np
+
+# Monomer XYZ needs e-pair (E) dummy atoms — see examples/add_epairs.py
+dimer = build_hbond_dimer('data/xyz/H2O.xyz', separation=2.9)  # E stripped inside
+backend = XTBBBackend(method='GFN2-xTB')
+rel = relax(dimer, backend, method='GFN2-xTB', mode='local')
+rel.geom.saveXYZ('tmp/H2O_dimer_xtb/relaxed.xyz', bQs=False)
+
+# Rigid acceptor-O ··· donor-O scan (indices from dimer layout — see scan_dimer._dimer_indices)
+i_acc, i_don = 0, rel.geom.natoms // 2
+r_eq = float(np.linalg.norm(rel.geom.apos[i_don] - rel.geom.apos[i_acc]))
+grid = make_scan_grid_geometric(r_eq)
+frames = make_rigid_shift_frames(rel.geom, i_acc, i_don, grid, mobile_indices=list(range(i_don, rel.geom.natoms)))
+rigid_scan(frames, backend, method='GFN2-xTB', mode='local')
+```
+
+Thin CLIs with outputs (`start.xyz`, `relaxed.xyz`, `scan.dat`, `scan.png`): [`examples/hbond/`](examples/hbond/README.md). DFTB+: set `sk_dir` in `machine_config.yaml`; use `--method-dftb none` for plain SCC when the binary lacks s-dftd3.
 
 ---
 
@@ -324,6 +423,9 @@ result = relaxed_scan(geom, backend, method='gfn2-xtb',
 6. **RETURN proper result types**: Use dataclasses from `tasks/base.py`, never raw tuples
 7. **CONVERT geometry properly**: Backends must handle both `AtomicSystem` objects and `(apos, es)` tuples
 8. **CHECK capabilities first**: Call `backend.check(task)` before attempting operations
+9. **NO plotting in core**: Use `plotUtils.py` / `molVisApp.py` for diagnostics; tasks and backends return data only
+10. **NO hard-coded paths**: Resolve tools and datasets via `config_loader` or environment variables; document externals in `DEPEND.md`
+11. **KEEP ASE optional**: Metal surface builders live in `system_specific/` or backend modules — not in `AtomicSystem` / tasks
 
 ---
 
@@ -336,6 +438,7 @@ result = relaxed_scan(geom, backend, method='gfn2-xtb',
 5. Implement `export_*` methods for cluster export (optional but recommended)
 6. Handle geometry conversion: `_to_backend_format()` and `_from_backend_format()`
 7. Map method/basis parameters appropriately for the software
+8. Update [`py/interfaces/README.md`](py/interfaces/README.md) with a one-line entry for the new backend
 
 ---
 
@@ -347,3 +450,4 @@ result = relaxed_scan(geom, backend, method='gfn2-xtb',
 4. Support both `mode='local'` and `mode='export'`
 5. Use `backend.check()` to verify capability
 6. Return appropriate result dataclass
+7. Update [`py/tasks/README.md`](py/tasks/README.md) with a one-line entry for the new module

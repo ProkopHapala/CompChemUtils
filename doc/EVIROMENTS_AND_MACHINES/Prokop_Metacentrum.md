@@ -79,6 +79,7 @@ Job states: `Q` (queued), `R` (running), `E` (exiting), `F` (finished)
 #PBS -l select=1:ncpus=16:mem=64gb:scratch_local=100gb
 #PBS -l walltime=24:00:00
 #PBS -j oe
+#PBS -q luna
 #PBS -M your@email.cz
 #PBS -m bae
 

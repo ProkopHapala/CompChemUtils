@@ -40,6 +40,52 @@ def make_scan_grid(r_start=1.5, r_fine_end=2.5, dr_fine=0.1,
     return np.concatenate([r_fine, r_coarse, [r_inf]])
 
 
+def make_scan_grid_geometric(r_eq, r_min=None, r_max=20.0,
+                             dr_fine=0.1, fine_half_width=1.0,
+                             span=1.0, dr_geo_init=0.2, dr_geo_factor=2.0,
+                             r_1A=6.0, dr_1A=1.0, r_5A_start=15.0, dr_5A=5.0):
+    """Bond-distance grid fine near r_eq, geometric coarsening, then 1 Å and 5 Å steps.
+
+    Regions
+    -------
+    [r_min … r_eq+fine_half_width]     : dr_fine (default 0.1 Å)
+    (r_eq+fine_half_width … r_1A]      : each `span` Å band, step doubles (0.2, 0.4, 0.8 … capped at dr_1A)
+    [r_1A … r_5A_start]                : dr_1A (default 1.0 Å)
+    [r_5A_start … r_max]               : dr_5A (default 5.0 Å), always includes r_max
+
+    Parameters
+    ----------
+    r_eq : equilibrium bond distance (Å), e.g. O···O from relaxed dimer
+    """
+    r_min = float(r_min if r_min is not None else max(1.5, r_eq - fine_half_width))
+    r_fine_hi = float(r_eq + fine_half_width)
+    fine = np.arange(r_min, r_fine_hi + 1e-9, dr_fine)
+
+    geo, r, dr = [], float(r_fine_hi), float(dr_geo_init)
+    while r < r_1A - 1e-9:
+        band_end = min(r + span, r_1A)
+        n_added = 0
+        while r + dr <= band_end + 1e-9:
+            r = round(r + dr, 6)
+            geo.append(r)
+            n_added += 1
+        if n_added == 0:
+            r = round(band_end, 6)
+            if not geo or geo[-1] < r - 1e-9:
+                geo.append(r)
+        dr = min(dr * dr_geo_factor, dr_1A)
+
+    mid_start = max(r_1A, geo[-1] if geo else r_fine_hi)
+    mid = np.arange(mid_start, r_5A_start + 1e-9, dr_1A)
+    far = list(np.arange(r_5A_start, r_max + 1e-9, dr_5A))
+    if not far or far[-1] < r_max - 1e-9:
+        far.append(r_max)
+
+    out = np.unique(np.round(np.concatenate([fine, geo, mid, far]), 6))
+    out.sort()
+    return out
+
+
 def make_rigid_shift_frames(geom, i_fixed, i_mobile, distances,
                              direction=None, mobile_indices=None):
     """Generate rigid-scan geometry frames by translating a molecular fragment.

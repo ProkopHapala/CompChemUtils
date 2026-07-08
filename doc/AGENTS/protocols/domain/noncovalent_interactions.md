@@ -92,6 +92,22 @@ The reference and target must use the **same mixing rule**. Switching between ar
 
 ---
 
+## CompChemUtils workflow (water dimer)
+
+Primary path: e-pair oriented build → relax → rigid O···O scan.
+
+| Step | Module / script |
+|------|-----------------|
+| Add E atoms to monomer XYZ | [`examples/add_epairs.py`](/examples/add_epairs.py) |
+| Build oriented dimer | `py.geom_engine.build_hbond_dimer` |
+| Relax | `py.tasks.relax` + `XTBBBackend` or `DFTBPlusBackend` |
+| Dissociation grid | `py.tasks.scan.make_scan_grid_geometric` |
+| Rigid scan | `examples/hbond/scan_dimer.py` |
+
+Reference numbers and outputs: [`examples/hbond/README.md`](/examples/hbond/README.md), topical audit [`doc/topical_audit.md`](/doc/topical_audit.md).
+
+---
+
 ## Rules
 
 1. **Sign errors in Coulomb are catastrophic.** Like charges must repel.
