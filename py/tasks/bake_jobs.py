@@ -109,6 +109,7 @@ def bake_pbs(job_prefix: str, mol: str, tag: str, spec: dict,
 #PBS -l select=1:ncpus={spec['ncpus']}:mem={spec['mem']}:scratch_local={scratch_gb}gb
 #PBS -l walltime={spec['walltime']}
 #PBS -j oe
+#PBS -q luna
 #PBS -m bae
 
 # {comment}
@@ -140,6 +141,7 @@ def bake_postprocess_pbs(job_prefix: str, mol: str, results_subdir: str,
 #PBS -l select=1:ncpus=1:mem=4gb:scratch_local=5gb
 #PBS -l walltime=00:15:00
 #PBS -j oe
+#PBS -q luna
 
 trap 'cp -r $SCRATCHDIR/* $PBS_O_WORKDIR/ 2>/dev/null; rm -rf $SCRATCHDIR/* 2>/dev/null' EXIT
 

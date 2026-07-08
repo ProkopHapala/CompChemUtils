@@ -1,26 +1,43 @@
 # MetaCentrum PBS Job Submission Skill
 # For AI agents: Hermes, Devin, OpenCode, Antigravity, Claude Code
 # Target: MetaCentrum Czech National Grid (OpenPBS)
-# Last updated: 2026-06-06
+# Last updated: 2026-07-08
 
 ## System Architecture
-- **Frontends** (login nodes): tarkil.metacentrum.cz, skirit.ics.muni.cz, alfrid.meta.zcu.cz, etc.
+- **Frontends** (login nodes): metafzu.fzu.cz (FZU), tarkil.metacentrum.cz, skirit.ics.muni.cz, etc.
 - **Scheduler**: OpenPBS (NOT Slurm - do not use sbatch/squeue)
-- **Storage**: NFS home directories, local scratch on compute nodes
+- **Storage**: NFS home directories (`storage-praha1.metacentrum.cz`), local scratch on compute nodes
 - **OS**: Debian Linux
 - **Modules**: Environment modules system (module add/load/avail)
 
 ## Critical Rules
 1. NEVER run computations on frontends - only job preparation and submission
-2. ALWAYS use scratch_local for I/O intensive jobs
-3. ALWAYS copy results back to home before job ends
-4. ALWAYS call clean_scratch at the end
+2. **ALWAYS use `#PBS -q luna`** for FZU jobs (batch and interactive) — dedicated queue with priority
+3. ALWAYS use scratch_local for I/O intensive jobs
+4. ALWAYS copy results back to home before job ends
 5. Use qsub for submission, qstat for monitoring, qdel for deletion
+
+## LUNA Queue (FZU dedicated)
+
+The **`luna`** queue is dedicated to FZU with priority access. Without `#PBS -q luna`, jobs go to the default shared queue (longer wait).
+
+```bash
+# Batch job — directive in script
+#PBS -q luna
+
+# Interactive compute node
+qsub -I -q luna -l walltime=02:00:00 -l select=1:ncpus=1:mem=2gb
+
+# Monitor luna queue
+qstat -q luna
+```
+
+Canonical agent skill: `doc/AGENTS/skills/metacentrum/SKILL.md`
 
 ## SSH Connection Template
 ```bash
-ssh username@tarkil.metacentrum.cz
-# or any frontend closer to your location
+ssh prokop@metafzu.fzu.cz
+# or tarkil.metacentrum.cz, skirit.ics.muni.cz
 ```
 
 ## Basic PBS Job Script Template
@@ -29,32 +46,28 @@ ssh username@tarkil.metacentrum.cz
 #PBS -N job_name
 #PBS -l walltime=HH:MM:SS
 #PBS -l select=1:ncpus=N:mem=Xgb:scratch_local=Ygb
-#PBS -m abe
-#PBS -M your_email@institution.cz
+#PBS -j oe
+#PBS -q luna
+#PBS -m ae
+
+trap 'cp -a $SCRATCHDIR/* $PBS_O_WORKDIR/ 2>/dev/null; rm -rf $SCRATCHDIR/*' EXIT
 
 echo "Job started at: $(date)"
 echo "Running on host: $(hostname)"
 echo "Job ID: $PBS_JOBID"
 echo "Scratch dir: $SCRATCHDIR"
 
-# Load required modules
-module add python
-# module add vasp
-# module add gpaw
+cd $PBS_O_WORKDIR
+module purge
+module add mambaforge    # or gpaw, vasp, etc.
+export OMP_NUM_THREADS=$PBS_NUM_PPN
 
-# Copy inputs to scratch
-cp $PBS_O_WORKDIR/input.* $SCRATCHDIR/
+cp input.* $SCRATCHDIR/
 cd $SCRATCHDIR
 
-# Run calculation
-python script.py > output.log 2>&1
+python3 script.py > output.log 2>&1
 
-# Copy outputs back
-cp output.log $PBS_O_WORKDIR/
-cp results.* $PBS_O_WORKDIR/
-
-# Cleanup
-clean_scratch
+echo "Finished: $(date)"
 ```
 
 ## Resource Request Syntax
