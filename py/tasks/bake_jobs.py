@@ -295,3 +295,128 @@ def bake_fukui_jobs(
         print(f"  qsub submit_{first_mol}_post.pbs   # example")
 
     return n_scripts
+
+
+# ===================== Vibration job baking =====================
+
+def discover_init_xyz_cases(geom_root: str) -> List[Tuple[str, str]]:
+    """Find all init.xyz under geom_root. Returns [(case_id, xyz_path), ...].
+
+    case_id uses '_' instead of '/' (e.g. Si/R3p8 -> Si_R3p8).
+    """
+    root = os.path.abspath(geom_root)
+    cases = []
+    for dirpath, _, files in os.walk(root):
+        if 'init.xyz' not in files:
+            continue
+        xyz = os.path.join(dirpath, 'init.xyz')
+        rel = os.path.relpath(dirpath, root)
+        case_id = rel.replace(os.sep, '_') if rel != '.' else os.path.basename(dirpath)
+        cases.append((case_id, xyz))
+    return sorted(cases, key=lambda x: x[0])
+
+
+def vib_resource_spec(natoms: int) -> dict:
+    """Heuristic PBS resources for PySCF relax + Hessian."""
+    if natoms <= 10:
+        return {'ncpus': 4, 'mem': '8gb', 'walltime': '02:00:00', 'scratch_gb': 10}
+    if natoms <= 30:
+        return {'ncpus': 8, 'mem': '16gb', 'walltime': '06:00:00', 'scratch_gb': 20}
+    if natoms <= 60:
+        return {'ncpus': 8, 'mem': '32gb', 'walltime': '12:00:00', 'scratch_gb': 30}
+    return {'ncpus': 16, 'mem': '64gb', 'walltime': '24:00:00', 'scratch_gb': 50}
+
+
+def bake_vib_pbs(job_prefix: str, case_id: str, spec: dict, script_name: str,
+                 module_name: str = 'mambaforge', scratch_gb: int = 20,
+                 omp_threads: str = '$PBS_NUM_PPN', comment: str = '') -> str:
+    """PBS script for one standalone vibration job (scratch -> workdir copy-all)."""
+    return f'''#!/bin/bash
+#PBS -N {job_prefix}_{case_id}
+#PBS -l select=1:ncpus={spec['ncpus']}:mem={spec['mem']}:scratch_local={scratch_gb}gb
+#PBS -l walltime={spec['walltime']}
+#PBS -j oe
+#PBS -m ae
+
+# {comment}
+# {spec['ncpus']} CPUs, {spec['mem']} RAM, {spec['walltime']}
+
+trap 'echo "[trap] copy scratch -> workdir"; cp -a $SCRATCHDIR/* $PBS_O_WORKDIR/ 2>/dev/null; rm -rf $SCRATCHDIR/* 2>/dev/null' EXIT
+
+if [ -z "$SCRATCHDIR" ]; then echo "Error: run via qsub (SCRATCHDIR empty)" >&2; exit 1; fi
+
+cd $PBS_O_WORKDIR
+module purge
+module add {module_name}
+export OMP_NUM_THREADS={omp_threads}
+export PYTHONUNBUFFERED=1
+
+echo "=== {job_prefix}_{case_id} === $(date)  OMP=$OMP_NUM_THREADS"
+
+cp $PBS_O_WORKDIR/{script_name} $SCRATCHDIR/
+cd $SCRATCHDIR
+python3 {script_name} 2>&1 | tee run.log
+
+echo "Finished: $(date)"
+'''
+
+
+def bake_vibration_jobs(
+    cases: List[Tuple[str, str]],
+    out_dir: str,
+    bake_run_fn: Callable,
+    job_prefix: str = 'pyscf_vib',
+    module_name: str = 'mambaforge',
+    omp_threads: str = '$PBS_NUM_PPN',
+    params: dict = None,
+    verbose: bool = True,
+) -> int:
+    """Bake standalone relax+vib Python scripts + PBS for each case.
+
+    cases: list of (case_id, xyz_path) from discover_init_xyz_cases()
+    bake_run_fn: (case_id, syms, ps, spec, params) -> python script source
+    """
+    if params is None:
+        params = {}
+    os.makedirs(out_dir, exist_ok=True)
+    geom_dst = os.path.join(out_dir, 'geometries')
+    os.makedirs(geom_dst, exist_ok=True)
+    pbs_paths = []
+
+    for case_id, xyz_path in cases:
+        syms, ps = read_xyz(xyz_path)
+        spec = vib_resource_spec(len(syms))
+        dst_xyz = os.path.join(geom_dst, f'{case_id}.xyz')
+        shutil.copy2(xyz_path, dst_xyz)
+
+        py_content = bake_run_fn(case_id, syms, ps, spec, params)
+        py_name = f'run_{case_id}.py'
+        py_path = os.path.join(out_dir, py_name)
+        with open(py_path, 'w') as f:
+            f.write(py_content)
+        os.chmod(py_path, 0o755)
+
+        pbs = bake_vib_pbs(job_prefix, case_id, spec, py_name, module_name,
+                           scratch_gb=spec['scratch_gb'], omp_threads=omp_threads,
+                           comment=f'{case_id} natoms={len(syms)}')
+        pbs_path = os.path.join(out_dir, f'submit_{case_id}.pbs')
+        with open(pbs_path, 'w') as f:
+            f.write(pbs)
+        os.chmod(pbs_path, 0o755)
+        pbs_paths.append(pbs_path)
+
+        if verbose:
+            print(f"  {case_id:20s}  natoms={len(syms):3d}  cpus={spec['ncpus']:2d}  "
+                  f"mem={spec['mem']:5s}  {spec['walltime']}")
+
+    submit_all = os.path.join(out_dir, 'submit_all.sh')
+    with open(submit_all, 'w') as f:
+        f.write('#!/bin/bash\n# Submit all PySCF vibration jobs\nset -euo pipefail\n')
+        for p in pbs_paths:
+            f.write(f'qsub {os.path.basename(p)}\n')
+    os.chmod(submit_all, 0o755)
+
+    if verbose:
+        print(f"\nGenerated {len(cases)} scripts in {out_dir}")
+        print(f"  cd {out_dir} && bash submit_all.sh")
+    return len(cases)

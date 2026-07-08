@@ -240,5 +240,5 @@ class PySCFBackend(CalculationBackend):
         freqs = freq_info['freq_wavenumber']
         modes = freq_info['norm_mode']
         import numpy as np
-        masses = np.array([mol.atom_mass_list()[i] for i in range(mol.natm())])
+        masses = np.array([mol.atom_mass_list()[i] for i in range(mol.natm)])
         return VibResult(geom=geom, frequencies=freqs, modes=modes, masses=masses)
