@@ -1,3 +1,5 @@
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ProkopHapala/CompChemUtils)
+
 # Computational Chemistry Utilities
 
 Python toolkit for molecular geometry, QC workflows, and diagnostics. One geometry/task stack drives multiple quantum-chemistry programs — swap backends without rewriting workflows.
