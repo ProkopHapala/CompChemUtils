@@ -95,6 +95,7 @@ def main():
         job_prefix='fukui',
         module_name='gpaw',
         mpi=True,
+        mpi_runner='gpaw-python',
         omp_threads='1',
         scratch_gb=10,
         params=params,

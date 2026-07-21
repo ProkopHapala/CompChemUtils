@@ -1,0 +1,18 @@
+#!/bin/bash
+#PBS -N gpaw_h2o_test
+#PBS -l select=1:ncpus=1:mem=2gb
+#PBS -l walltime=00:10:00
+#PBS -j oe
+
+cd $PBS_O_WORKDIR
+module purge
+module add py-gpaw/24.1.0-gcc-10.2.1-fojjhkw
+export GPAW_SETUP_PATH=/software/gpaw/1.4.0/setup_files/gpaw-setups-0.9.20000
+
+echo "=== Node: $(hostname) ==="
+echo "=== Python: $(which python3) ==="
+echo "=== GPAW: $(python3 -c 'import gpaw; print(gpaw.__version__)') ==="
+echo "=== ASE: $(python3 -c 'import ase; print(ase.__version__)') ==="
+
+python3 gpaw_h2o_test.py
+echo "=== Exit code: $? ==="

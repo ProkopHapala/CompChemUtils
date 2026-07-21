@@ -192,7 +192,7 @@ python3 -m venv $SCRATCHDIR/venv && source $SCRATCHDIR/venv/bin/activate && pip 
 
 **PySCF:** NOT a module. Use `module add mambaforge` then `pip install --user pyscf` (v2.13.1 available). Set `mf.chkfile='calc.chk'` for restart. Use density fitting for large systems. Set `OMP_NUM_THREADS=$PBS_NUM_PPN`.
 
-**GPAW:** `module add gpaw`. Set `GPAW_SETUP_PATH`. Parallel: `mpirun -np N gpaw-python script.py`. LCAO mode faster for molecules. Save density restart files (small, useful). Do NOT save wavefunction restart files — too large for slow disk (same as VASP WAVECAR).
+**GPAW:** `module add py-gpaw/24.1.0-gcc-10.2.1-fojjhkw` (spack build). **Must manually set `GPAW_SETUP_PATH`** — the spack module does NOT set it. Setups at `/storage/praha1/home/prokop/gpaw-setups-24.1.0/gpaw-setups-24.1.0/`. Do NOT use `/cfs/projects/` paths — not mounted on compute nodes. To install setups: `wget https://wiki.fysik.dtu.dk/gpaw-files/gpaw-setups-24.1.0.tar.gz` then `tar -xzf` (the `gpaw install-data` command fails with 403 Forbidden on MetaCentrum). Use `python3` (not `gpaw-python`) with `mpirun -np $PBS_NUM_PPN python3 script.py`. For PW restart: constant cell required across frames. Set `maxiter=200` for convergence.
 
 **VASP:** `module add vasp/6.x.x`. Files: `POSCAR`, `POTCAR`, `INCAR`, `KPOINTS`. Run: `mpirun -np N vasp_std`. Save `CHGCAR` for restart (small, useful). Do NOT save `WAVECAR` — too large for slow disk.
 
@@ -220,6 +220,8 @@ Crash signatures to check in `.e`/`.o` files:
 - `Convergence failure` / `Energy not converging` → SCF parameters
 - `walltime` / exit -29 → needs more time or checkpoint restart
 - `Out of memory` / exit -27 → increase `mem=`
+- `FileNotFoundError: Could not find required PAW dataset file` → `GPAW_SETUP_PATH` not set or points to non-existent directory. Check with `ls $GPAW_SETUP_PATH/C.PBE.gz` on compute node.
+- `MPI_ABORT` → usually follows from a Python error on rank 0 — check full traceback above
 
 ## Parallel Job Pattern (Multiple Runs per Job)
 

@@ -184,16 +184,23 @@ Common chemistry software: `vasp`, `gpaw`, `psi4`, `python` (with PySCF via pip/
 # Code-Specific Tips
 
 ## PySCF
-- Load: `module add python` (install pyscf via pip/conda)
+- Load: `module add mambaforge` (install pyscf via pip)
 - Save checkpoints: `mf.chkfile = 'calc.chk'`
-- For large systems: use density fitting to reduce memory
+- For large systems: use density fitting (`mf.density_fit()`) to reduce memory
 - Set `export OMP_NUM_THREADS=$PBS_NUM_PPN` to avoid thread over-allocation
+- For rigid scans: reuse density matrix from previous step — `mf.kernel(dm0=prev_dm)` then `prev_dm = mf.make_rdm1()`. Start from far (non-interacting) distance and approach closer for better SCF convergence.
 
 ## GPAW
-- Load: `module add gpaw`
-- Set `GPAW_SETUP_PATH` for pseudopotentials
-- Parallel: `mpirun -np N gpaw-python script.py`
+- Load: `module add py-gpaw/24.1.0-gcc-10.2.1-fojjhkw` (newer spack build) or `module add gpaw` (old 1.4.0)
+- **GPAW_SETUP_PATH required:** The `py-gpaw/24.1.0` module does NOT set this automatically. Must export manually.
+  - Setups installed at: `/storage/praha1/home/prokop/gpaw-setups-24.1.0/gpaw-setups-24.1.0/`
+  - Old module `gpaw/1.4.0` sets it to `/software/gpaw/1.4.0/setup_files/gpaw-setups-0.9.20000` (incompatible with 24.1.0)
+  - To install new setups: `wget https://wiki.fysik.dtu.dk/gpaw-files/gpaw-setups-24.1.0.tar.gz` then `tar -xzf` (gpaw install-data command fails with 403 Forbidden)
+  - **Do NOT use `/cfs/projects/PE54049/` — not mounted on compute nodes**
+- Parallel: `mpirun -np $PBS_NUM_PPN python3 script.py` (use `python3`, not `gpaw-python` — the spack module provides the right Python)
 - LCAO mode is much faster than PW for molecules
+- For PW mode with restart: use constant cell across all scan frames (PW restart requires same cell)
+- Set `maxiter=200` for difficult convergence cases
 
 ## VASP
 - Load: `module add vasp/6.x.x`

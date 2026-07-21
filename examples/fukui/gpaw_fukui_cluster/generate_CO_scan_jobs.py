@@ -23,14 +23,14 @@ PLOT_DIR = os.path.join(SCRIPT_DIR, 'plots_CO_scan')
 R_CO = 1.128  # CO bond length (Å)
 
 MOLECULES = {
-    'H2O':       {'ncpus': 4,  'mem': '8gb',   'walltime': '02:00:00'},
-    'CH2O':      {'ncpus': 4,  'mem': '8gb',   'walltime': '02:00:00'},
-    'CH2NH':     {'ncpus': 4,  'mem': '8gb',   'walltime': '02:00:00'},
-    'C2H4':      {'ncpus': 4,  'mem': '8gb',   'walltime': '02:00:00'},
-    'pyrrol':    {'ncpus': 8,  'mem': '16gb',  'walltime': '04:00:00'},
-    'pyridine':  {'ncpus': 8,  'mem': '16gb',  'walltime': '04:00:00'},
-    'pentacene': {'ncpus': 16, 'mem': '32gb',  'walltime': '12:00:00'},
-    'PTCDA':     {'ncpus': 16, 'mem': '32gb',  'walltime': '12:00:00'},
+    'H2O':       {'ncpus': 4,  'mem': '16gb',  'walltime': '02:00:00'},
+    'CH2O':      {'ncpus': 4,  'mem': '16gb',  'walltime': '02:00:00'},
+    'CH2NH':     {'ncpus': 4,  'mem': '16gb',  'walltime': '02:00:00'},
+    'C2H4':      {'ncpus': 4,  'mem': '16gb',  'walltime': '02:00:00'},
+    'pyrrol':    {'ncpus': 8,  'mem': '24gb',  'walltime': '04:00:00'},
+    'pyridine':  {'ncpus': 8,  'mem': '24gb',  'walltime': '04:00:00'},
+    'pentacene': {'ncpus': 16, 'mem': '48gb',  'walltime': '12:00:00'},
+    'PTCDA':     {'ncpus': 16, 'mem': '48gb',  'walltime': '12:00:00'},
 }
 
 HEAVY_ELEMS = {'C', 'N', 'O'}
@@ -407,7 +407,7 @@ def plot_overview(all_mols_data, fname):
 # Scan grid
 # ==================================================================
 
-def make_scan_grid(r_start=2.0, r_fine_end=3.0, dr_fine=0.1,
+def make_scan_grid(r_start=1.5, r_fine_end=3.0, dr_fine=0.1,
                    r_coarse_end=6.0, dr_coarse=0.25, r_inf=15.0):
     r_fine   = np.arange(r_start, r_fine_end + 1e-9, dr_fine)
     r_coarse = np.arange(r_fine_end + dr_coarse, r_coarse_end + 1e-9, dr_coarse)
@@ -418,51 +418,66 @@ def make_scan_grid(r_start=2.0, r_fine_end=3.0, dr_fine=0.1,
 # Box positions (center in vacuum cell)
 # ==================================================================
 
-def box_positions(mol_ps, co_ps, vacuum):
-    """Center molecule + CO in a cell with vacuum padding.
+def box_positions(mol_ps, co_ps, vacuum_xy, z_cell):
+    """Center molecule + CO in a cell with vacuum_xy padding in x,y and fixed z_cell in z.
     Returns (all_ps_shifted, cell)."""
     all_ps = np.vstack([mol_ps, co_ps])
     rmin = all_ps.min(axis=0)
     rmax = all_ps.max(axis=0)
     extent = rmax - rmin
-    cell = extent + 2 * vacuum
+    cell = np.array([extent[0] + 2 * vacuum_xy, extent[1] + 2 * vacuum_xy, z_cell])
     shift = 0.5 * cell - 0.5 * (rmin + rmax)
     return all_ps + shift, cell
+
+
+def box_molecule(mol_ps, vacuum_xy, z_cell):
+    """Center molecule alone in a cell with vacuum_xy padding in x,y and fixed z_cell in z.
+    Returns (mol_ps_shifted, cell)."""
+    rmin = mol_ps.min(axis=0)
+    rmax = mol_ps.max(axis=0)
+    extent = rmax - rmin
+    cell = np.array([extent[0] + 2 * vacuum_xy, extent[1] + 2 * vacuum_xy, z_cell])
+    shift = 0.5 * cell - 0.5 * (rmin + rmax)
+    return mol_ps + shift, cell
 
 
 # ==================================================================
 # Bake standalone scan script
 # ==================================================================
 
-def bake_scan_script(mol, syms, mol_ps, atom_idx, atom_label, ecut, vacuum, xc, r_grid, spec):
+def bake_scan_script(mol, syms, mol_ps, atom_idx, atom_label, ecut, vacuum, z_cell, xc, r_grid, spec):
     """Bake a standalone GPAW scan script for one (molecule, atom) pair."""
     n_mol = len(syms)
     outdir_rel = f"results/CO_scan_{mol}_{xc}_{int(ecut)}eV"
     tag = f"{mol}_atom{atom_idx}_{atom_label}"
 
     # Pre-compute boxed molecule positions (for E_mol calc)
-    mol_boxed, mol_cell = box_positions(mol_ps, mol_ps[:1].copy(), vacuum)
+    mol_boxed, mol_cell = box_molecule(mol_ps, vacuum, z_cell)
 
-    # Pre-compute CO positions for each r (unboxed, relative to molecule)
+    # Pre-compute CO positions for each r (O-apex: O closer to molecule)
     co_positions_per_r = []
     for r in r_grid:
-        c_pos = mol_ps[atom_idx] + np.array([0.0, 0.0, r])
-        o_pos = c_pos + np.array([0.0, 0.0, R_CO])
+        o_pos = mol_ps[atom_idx] + np.array([0.0, 0.0, r])
+        c_pos = o_pos + np.array([0.0, 0.0, R_CO])
         co_positions_per_r.append((c_pos.tolist(), o_pos.tolist()))
 
     # Pre-compute boxed positions for each r
     boxed_per_r = []
     cells_per_r = []
     for c_pos, o_pos in co_positions_per_r:
-        all_boxed, cell = box_positions(mol_ps, np.array([c_pos, o_pos]), vacuum)
+        all_boxed, cell = box_positions(mol_ps, np.array([c_pos, o_pos]), vacuum, z_cell)
         boxed_per_r.append(all_boxed.tolist())
         cells_per_r.append(cell.tolist())
 
-    r_list = r_grid.tolist()
+    # Reverse: scan from far (non-interacting) to near for better SCF convergence
+    r_list = r_grid.tolist()[::-1]
+    boxed_per_r = boxed_per_r[::-1]
+    cells_per_r = cells_per_r[::-1]
 
     return f'''#!/usr/bin/env python3
 """CO rigid scan over {mol} atom {atom_idx} ({atom_label}).
-GPAW {xc} PW({int(ecut)}eV) vacuum={vacuum}A. Uses restart between frames.
+GPAW {xc} PW({int(ecut)}eV) vacuum_xy={vacuum}A z_cell={z_cell}A. Independent SCF per frame (no restart).
+Scan order: far -> near (for consistent reference).
 
 E_int(r) = E_total(r) - E_mol - E_CO
 
@@ -470,21 +485,21 @@ Auto-generated by generate_CO_scan_jobs.py — no external dependencies.
 """
 import os, numpy as np
 from ase import Atoms
-from gpaw import GPAW, PW, FermiDirac, restart as gpaw_restart
+from gpaw import GPAW, PW, FermiDirac
 
 MOL = "{mol}"
 ATOM_IDX = {atom_idx}
 ATOM_LABEL = "{atom_label}"
 ECUT = {ecut}
 XC = "{xc}"
-VACUUM = {vacuum}
+VACUUM_XY = {vacuum}
+Z_CELL = {z_cell}
 R_CO = {R_CO}
 
 OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "{outdir_rel}")
 os.makedirs(OUTDIR, exist_ok=True)
 
 TAG = "{tag}"
-RESTART_FILE = os.path.join(OUTDIR, TAG + "_restart.gpw")
 
 R_GRID = {r_list!r}
 MOL_SYMS = {syms!r}
@@ -499,6 +514,7 @@ ALL_SYMS = MOL_SYMS + ['C', 'O']
 mol_atoms = Atoms(symbols=MOL_SYMS, positions=MOL_BOXED, cell=MOL_CELL, pbc=True)
 mol_calc = GPAW(mode=PW(ECUT), xc=XC, charge=0, spinpol=False,
                 occupations=FermiDirac(0.05), kpts=(1,1,1), symmetry='off',
+                maxiter=200,
                 convergence=dict(energy=1e-5, density=1e-5, bands='occupied'),
                 txt=os.path.join(OUTDIR, TAG + '_mol.txt'))
 mol_atoms.calc = mol_calc
@@ -513,17 +529,22 @@ co_atoms = Atoms(symbols=['C', 'O'],
                  cell=MOL_CELL, pbc=True)
 co_calc = GPAW(mode=PW(ECUT), xc=XC, charge=0, spinpol=False,
                occupations=FermiDirac(0.05), kpts=(1,1,1), symmetry='off',
+               maxiter=200,
                convergence=dict(energy=1e-5, density=1e-5, bands='occupied'),
                txt=os.path.join(OUTDIR, TAG + '_CO.txt'))
 co_atoms.calc = co_calc
 E_CO = co_atoms.get_potential_energy()
 print(f"[{{TAG}}] E_CO  = {{E_CO:.6f}} eV")
 
-# --- 3. Scan (incremental save) ---
+# --- 3. Scan (independent SCF per frame, no restart) ---
+# PW restart (density on grid) is NOT useful when atoms move between frames:
+# the restart density has peaks where atoms no longer are, so SCF must unrelax
+# wrong density first. Starting from atomic densities is cleaner and often faster.
+# Without restart, each frame can also use its own optimally-sized cell.
 dat_file = os.path.join(OUTDIR, TAG + '_scan.dat')
 dat_fh = open(dat_file, 'w')
 dat_fh.write(f"# CO rigid scan over {{MOL}} atom {{ATOM_IDX}} ({{ATOM_LABEL}})\\n")
-dat_fh.write(f"# Method: GPAW {{XC}} PW({{int(ECUT)}}eV) vacuum={{VACUUM}}A\\n")
+dat_fh.write(f"# Method: GPAW {{XC}} PW({{int(ECUT)}}eV) vacuum_xy={{VACUUM_XY}}A z_cell={{Z_CELL}}A\\n")
 dat_fh.write(f"# E_mol = {{E_mol:.6f}} eV, E_CO = {{E_CO:.6f}} eV\\n")
 dat_fh.write("# r(A)    E_int(eV)\\n")
 dat_fh.flush()
@@ -532,19 +553,24 @@ for ir, r in enumerate(R_GRID):
     boxed = BOXED_PER_R[ir]
     cell = CELLS_PER_R[ir]
 
-    if ir > 0 and os.path.isfile(RESTART_FILE):
-        prev_atoms, calc = gpaw_restart(RESTART_FILE,
-                                        txt=os.path.join(OUTDIR, TAG + f'_r{{r:.2f}}.txt'))
-        prev_atoms.positions = boxed
-        prev_atoms.calc = calc
-        combined = prev_atoms
-    else:
-        combined = Atoms(symbols=ALL_SYMS, positions=boxed, cell=cell, pbc=True)
-        calc = GPAW(mode=PW(ECUT), xc=XC, charge=0, spinpol=False,
-                    occupations=FermiDirac(0.05), kpts=(1,1,1), symmetry='off',
-                    convergence=dict(energy=1e-5, density=1e-5, bands='occupied'),
-                    txt=os.path.join(OUTDIR, TAG + f'_r{{r:.2f}}.txt'))
-        combined.calc = calc
+    # # Old: PW restart from previous frame's density (commented out — see justification above)
+    # if ir > 0 and os.path.isfile(RESTART_FILE):
+    #     prev_atoms, calc = gpaw_restart(RESTART_FILE, txt=...)
+    #     prev_atoms.set_cell(CONST_CELL, scale_atoms=False)
+    #     prev_atoms.positions = boxed
+    #     combined = prev_atoms
+    # else:
+    #     combined = Atoms(symbols=ALL_SYMS, positions=boxed, cell=CONST_CELL, pbc=True)
+    #     calc = GPAW(...)
+    #     combined.calc = calc
+
+    combined = Atoms(symbols=ALL_SYMS, positions=boxed, cell=cell, pbc=True)
+    calc = GPAW(mode=PW(ECUT), xc=XC, charge=0, spinpol=False,
+                occupations=FermiDirac(0.05), kpts=(1,1,1), symmetry='off',
+                maxiter=200,
+                convergence=dict(energy=1e-5, density=1e-5, bands='occupied'),
+                txt=os.path.join(OUTDIR, TAG + f'_r{{r:.2f}}.txt'))
+    combined.calc = calc
 
     E = combined.get_potential_energy()
     E_int = E - E_mol - E_CO
@@ -552,18 +578,16 @@ for ir, r in enumerate(R_GRID):
     dat_fh.flush()
     print(f"[{{TAG}}] r={{r:6.2f}}  E_tot={{E:12.6f}}  E_int={{E_int:12.6f}} eV")
 
-    calc.write(RESTART_FILE, mode='all')
+    # calc.write(RESTART_FILE, mode='all')  # no longer needed — independent SCF per frame
 
 dat_fh.close()
 print(f"[{{TAG}}] Saved: {{dat_file}}")
 
-# Clean up restart file
-if os.path.isfile(RESTART_FILE):
-    os.remove(RESTART_FILE)
+# No restart file to clean up — independent SCF per frame
 '''
 
 
-def bake_pbs(mol, atom_idx, atom_label, spec, ecut, vacuum, xc):
+def bake_pbs(mol, atom_idx, atom_label, spec, ecut, vacuum, z_cell, xc):
     tag = f"{mol}_atom{atom_idx}_{atom_label}"
     return f'''#!/bin/bash
 #PBS -N COscan_{tag}
@@ -571,25 +595,32 @@ def bake_pbs(mol, atom_idx, atom_label, spec, ecut, vacuum, xc):
 #PBS -l walltime={spec['walltime']}
 #PBS -j oe
 #PBS -m bae
+#PBS -q luna
 
-# CO scan {tag} | GPAW {xc} PW({int(ecut)}eV) vacuum={vacuum}
+# CO scan {tag} | GPAW {xc} PW({int(ecut)}eV) vacuum_xy={vacuum} z_cell={z_cell}
 # {spec['ncpus']} CPUs, {spec['mem']} RAM, {spec['walltime']}
 
-trap 'cp -r $SCRATCHDIR/* $PBS_O_WORKDIR/ 2>/dev/null; rm -rf $SCRATCHDIR/* 2>/dev/null' EXIT
+cleanup_gpaw() {{
+  mkdir -p $PBS_O_WORKDIR/results
+  find $SCRATCHDIR/results -name '*.dat' -exec cp --parents {{}} $PBS_O_WORKDIR/ \; 2>/dev/null
+  find $SCRATCHDIR/results -name '*.txt' -exec cp --parents {{}} $PBS_O_WORKDIR/ \; 2>/dev/null
+  rm -rf $SCRATCHDIR/* 2>/dev/null
+}}
+trap cleanup_gpaw EXIT
 
 cd $PBS_O_WORKDIR
 module purge
-module add gpaw
+module add py-gpaw/24.1.0-gcc-10.2.1-fojjhkw
+export GPAW_SETUP_PATH=/storage/praha1/home/prokop/gpaw-setups-24.1.0/gpaw-setups-24.1.0
 export OMP_NUM_THREADS=1
 
 echo "=== COscan_{tag} === $(date)"
 
 cp $PBS_O_WORKDIR/run_{tag}.py $SCRATCHDIR/
 cd $SCRATCHDIR
-mpirun -np $PBS_NUM_PPN gpaw-python run_{tag}.py 2>&1
+mpirun -np $PBS_NUM_PPN python3 run_{tag}.py 2>&1
 
 echo "Finished: $(date)"
-cp -r $SCRATCHDIR/results $PBS_O_WORKDIR/ 2>/dev/null
 '''
 
 
@@ -628,18 +659,21 @@ def bake_pyscf_scan_script(mol, syms, mol_ps, atom_idx, atom_label, basis, xc, r
     mol_atom_str = '; '.join(f"{s} {p[0]:.6f} {p[1]:.6f} {p[2]:.6f}"
                              for s, p in zip(syms, mol_ps))
 
-    # Build CO positions for each r
+    # Build CO positions for each r (O-apex: O closer to molecule)
     co_atoms_per_r = []
     for r in r_grid:
-        c_pos = mol_ps[atom_idx] + np.array([0.0, 0.0, r])
-        o_pos = c_pos + np.array([0.0, 0.0, R_CO])
+        o_pos = mol_ps[atom_idx] + np.array([0.0, 0.0, r])
+        c_pos = o_pos + np.array([0.0, 0.0, R_CO])
         co_atoms_per_r.append((c_pos.tolist(), o_pos.tolist()))
 
-    r_list = r_grid.tolist()
+    # Reverse: scan from far (non-interacting) to near for better SCF convergence
+    r_list = r_grid.tolist()[::-1]
+    co_atoms_per_r = co_atoms_per_r[::-1]
 
     return f'''#!/usr/bin/env python3
 """CO rigid scan over {mol} atom {atom_idx} ({atom_label}).
 PySCF DFT {xc}/{basis}. No periodic cell (molecular calculation).
+Scan order: far -> near (for SCF convergence). Reuses DM from previous step.
 
 E_int(r) = E_total(r) - E_mol - E_CO
 
@@ -666,13 +700,14 @@ MOL_SYMS = {syms!r}
 MOL_PS = {mol_ps.tolist()!r}
 CO_ATOMS_PER_R = {co_atoms_per_r!r}
 
-lib.num_threads = {spec['ncpus']}
+lib.num_threads = int(os.environ.get("OMP_NUM_THREADS", {spec['ncpus']}))
 
 # --- 1. Isolated molecule ---
 mol_mol = gto.M(atom=MOL_ATOM_STR, basis=BASIS, unit='Angstrom',
                 verbose=4, output=os.path.join(OUTDIR, TAG + '_mol.out'))
 mf_mol = dft.RKS(mol_mol)
 mf_mol.xc = XC
+mf_mol = mf_mol.density_fit()
 mf_mol.grids.level = 4
 E_mol = mf_mol.kernel()
 print(f"[{{TAG}}] E_mol = {{E_mol:.6f}} Ha = {{E_mol * 27.2114:.6f}} eV")
@@ -683,11 +718,12 @@ mol_co = gto.M(atom=co_str, basis=BASIS, unit='Angstrom',
                verbose=4, output=os.path.join(OUTDIR, TAG + '_CO.out'))
 mf_co = dft.RKS(mol_co)
 mf_co.xc = XC
+mf_co = mf_co.density_fit()
 mf_co.grids.level = 4
 E_CO = mf_co.kernel()
 print(f"[{{TAG}}] E_CO  = {{E_CO:.6f}} Ha = {{E_CO * 27.2114:.6f}} eV")
 
-# --- 3. Scan (incremental save) ---
+# --- 3. Scan (far -> near, reuse DM from previous step) ---
 dat_file = os.path.join(OUTDIR, TAG + '_scan.dat')
 dat_fh = open(dat_file, 'w')
 dat_fh.write(f"# CO rigid scan over {{MOL}} atom {{ATOM_IDX}} ({{ATOM_LABEL}})\\n")
@@ -696,6 +732,7 @@ dat_fh.write(f"# E_mol = {{E_mol:.6f}} Ha, E_CO = {{E_CO:.6f}} Ha\\n")
 dat_fh.write("# r(A)    E_int(Ha)    E_int(eV)\\n")
 dat_fh.flush()
 
+prev_dm = None
 for ir, r in enumerate(R_GRID):
     c_pos, o_pos = CO_ATOMS_PER_R[ir]
     # Build combined atom string: molecule + CO
@@ -705,11 +742,10 @@ for ir, r in enumerate(R_GRID):
                     verbose=4, output=os.path.join(OUTDIR, TAG + f'_r{{r:.2f}}.out'))
     mf_tot = dft.RKS(mol_tot)
     mf_tot.xc = XC
+    mf_tot = mf_tot.density_fit()
     mf_tot.grids.level = 4
-    # Use density guess from previous frame if available
-    if ir > 0:
-        mf_tot.init_guess = 'vsap'  # better than atom-wise for overlapping fragments
-    E_tot = mf_tot.kernel()
+    E_tot = mf_tot.kernel(dm0=prev_dm)
+    prev_dm = mf_tot.make_rdm1()
     E_int_ha = E_tot - E_mol - E_CO
     E_int_ev = E_int_ha * 27.2114
     dat_fh.write(f"{{r:.4f}}  {{E_int_ha:.8f}}  {{E_int_ev:.8f}}\\n")
@@ -729,6 +765,7 @@ def bake_pyscf_pbs(mol, atom_idx, atom_label, spec, basis, xc):
 #PBS -l walltime={spec['walltime']}
 #PBS -j oe
 #PBS -m bae
+#PBS -q luna
 
 # CO scan {tag} | PySCF DFT {xc}/{basis}
 # {spec['ncpus']} CPUs, {spec['mem']} RAM, {spec['walltime']}
@@ -737,8 +774,8 @@ trap 'cp -r $SCRATCHDIR/* $PBS_O_WORKDIR/ 2>/dev/null; rm -rf $SCRATCHDIR/* 2>/d
 
 cd $PBS_O_WORKDIR
 module purge
-module add pyscf
-export OMP_NUM_THREADS={spec['ncpus']}
+module add mambaforge
+export OMP_NUM_THREADS=$PBS_NUM_PPN
 
 echo "=== COscan_pyscf_{tag} === $(date)"
 
@@ -757,7 +794,8 @@ cp -r $SCRATCHDIR/results $PBS_O_WORKDIR/ 2>/dev/null
 def main():
     parser = argparse.ArgumentParser(description='Generate CO rigid-scan jobs with symmetry detection')
     parser.add_argument('--ecut', type=float, default=500.0, help='GPAW PW cutoff (eV)')
-    parser.add_argument('--vacuum', type=float, default=12.0, help='Vacuum padding (Å) for GPAW')
+    parser.add_argument('--vacuum', type=float, default=6.0, help='Vacuum padding in x,y (Å) for GPAW')
+    parser.add_argument('--z_cell', type=float, default=30.0, help='Fixed cell z-dimension (Å) for GPAW')
     parser.add_argument('--xc', type=str, default='PBE')
     parser.add_argument('--tol', type=float, default=0.1, help='Symmetry tolerance (Å)')
     parser.add_argument('--pyscf', action='store_true', help='Also generate PySCF DFT jobs')
@@ -777,7 +815,7 @@ def main():
 
     r_grid = make_scan_grid()
 
-    print(f"Generating CO scan jobs: ecut={args.ecut} vacuum={args.vacuum} xc={args.xc}")
+    print(f"Generating CO scan jobs: ecut={args.ecut} vacuum_xy={args.vacuum} z_cell={args.z_cell} xc={args.xc}")
     if args.pyscf:
         print(f"Also generating PySCF DFT jobs: basis={args.basis} xc={args.xc}")
     print(f"Scan grid: {len(r_grid)} points, r=[{r_grid[0]:.2f}..{r_grid[-1]:.2f}] Å")
@@ -821,22 +859,25 @@ def main():
             print(f"  {'':12s}   {label:8s} (idx={idx:2d})  equiv: [{equiv_str}]")
 
         # Plot
-        plot_fname = os.path.join(PLOT_DIR, f'selected_{mol}.png')
-        plot_molecule(syms, ps, selected, classes, mol, ops_desc, plot_fname)
+        try:
+            plot_fname = os.path.join(PLOT_DIR, f'selected_{mol}.png')
+            plot_molecule(syms, ps, selected, classes, mol, ops_desc, plot_fname)
+        except Exception as e:
+            print(f"  {'':12s} (plot skipped: {e})")
 
         all_mols_data.append((mol, syms, ps, selected, classes, ops_desc))
 
         # Bake GPAW scripts
         for atom_idx, atom_label in selected:
             py = bake_scan_script(mol, syms, ps, atom_idx, atom_label,
-                                  args.ecut, args.vacuum, args.xc, r_grid, spec)
+                                  args.ecut, args.vacuum, args.z_cell, args.xc, r_grid, spec)
             tag = f"{mol}_atom{atom_idx}_{atom_label}"
             py_path = os.path.join(JOBS_DIR, f'run_{tag}.py')
             with open(py_path, 'w') as f:
                 f.write(py)
             os.chmod(py_path, 0o755)
 
-            pbs = bake_pbs(mol, atom_idx, atom_label, spec, args.ecut, args.vacuum, args.xc)
+            pbs = bake_pbs(mol, atom_idx, atom_label, spec, args.ecut, args.vacuum, args.z_cell, args.xc)
             with open(os.path.join(JOBS_DIR, f'submit_{tag}.pbs'), 'w') as f:
                 f.write(pbs)
 
@@ -861,8 +902,11 @@ def main():
                 n_pyscf_scripts += 1
 
     # Overview plot
-    overview_fname = os.path.join(PLOT_DIR, 'selected_overview.png')
-    plot_overview(all_mols_data, overview_fname)
+    try:
+        overview_fname = os.path.join(PLOT_DIR, 'selected_overview.png')
+        plot_overview(all_mols_data, overview_fname)
+    except Exception as e:
+        print(f"  (overview plot skipped: {e})")
 
     # submit_all.sh for GPAW
     submit_script = bake_submit_all(n_scripts)

@@ -22,6 +22,9 @@ Usage example (GPAW):
         out_dir='jobs',
         backend='gpaw',
         bake_run_fn=GPAWConfig.bake_run_script,
+        mpi=True,
+        mpi_runner='gpaw-python',   # GPAW-specific MPI executable
+        module_name='py-gpaw/24.1.0-gcc-10.2.1-fojjhkw',
         params=dict(ecut=500, vacuum=12, xc='PBE'),
     )
 
@@ -32,6 +35,8 @@ Usage example (PySCF):
         out_dir='jobs',
         backend='pyscf',
         bake_run_fn=PySCFConfig.bake_run_script,
+        mpi=False,                   # PySCF uses OpenMP, not MPI
+        module_name='mambaforge',
         params=dict(basis='def2-SVP', xc='PBE', resolution=0.15, margin=4.0),
     )
 """
@@ -82,7 +87,8 @@ def spin_for_charge(nelec: int, charge: int) -> int:
 
 def bake_pbs(job_prefix: str, mol: str, tag: str, spec: dict,
              script_name: str, module_name: str, scratch_gb: int = 10,
-             mpi: bool = False, omp_threads: Optional[str] = None,
+             mpi: bool = False, mpi_runner: str = 'python3',
+             omp_threads: Optional[str] = None,
              comment: str = '') -> str:
     """Generate a PBS submission script for one job.
 
@@ -95,14 +101,15 @@ def bake_pbs(job_prefix: str, mol: str, tag: str, spec: dict,
     script_name  : name of the baked script to run (e.g. 'run_H2O_N.py')
     module_name  : module to load (e.g. 'gpaw', 'mambaforge')
     scratch_gb   : scratch_local size in GB
-    mpi          : if True, run via 'mpirun -np $PBS_NUM_PPN'
+    mpi          : if True, run via 'mpirun -np $PBS_NUM_PPN <mpi_runner> <script>'
+    mpi_runner   : executable for MPI runs (e.g. 'gpaw-python' for GPAW, 'python3' for others)
     omp_threads  : OMP_NUM_THREADS value. None=1 (default for MPI),
                    '$PBS_NUM_PPN' for OpenMP parallelism
     comment      : extra comment line in PBS header
     """
     if omp_threads is None:
         omp_threads = '1'
-    run_line = f"mpirun -np $PBS_NUM_PPN gpaw-python {script_name} 2>&1" if mpi \
+    run_line = f"mpirun -np $PBS_NUM_PPN {mpi_runner} {script_name} 2>&1" if mpi \
         else f"python3 {script_name} 2>&1"
     return f'''#!/bin/bash
 #PBS -N {job_prefix}_{mol}_{tag}
@@ -126,6 +133,9 @@ echo "=== {job_prefix}_{mol}_{tag} === $(date)"
 
 cp $PBS_O_WORKDIR/{script_name} $SCRATCHDIR/
 cd $SCRATCHDIR
+export TMPDIR=$SCRATCHDIR
+export TMP=$SCRATCHDIR
+export TEMP=$SCRATCHDIR
 {run_line}
 
 echo "Finished: $(date)"
@@ -205,6 +215,7 @@ def bake_fukui_jobs(
     job_prefix: str,
     module_name: str,
     mpi: bool = False,
+    mpi_runner: str = 'python3',
     omp_threads: Optional[str] = None,
     scratch_gb: int = 10,
     charge_states: List[Tuple[str, int]] = None,
@@ -227,6 +238,7 @@ def bake_fukui_jobs(
     job_prefix      : prefix for PBS job names (e.g. 'fukui', 'pyscf_fukui')
     module_name     : module to load in PBS (e.g. 'gpaw', 'mambaforge')
     mpi             : use mpirun in PBS
+    mpi_runner      : MPI executable (e.g. 'gpaw-python' for GPAW, 'python3' for others)
     omp_threads     : OMP_NUM_THREADS value
     scratch_gb      : scratch_local size
     charge_states   : list of (tag, charge), default [('N',0),('A',-1),('C',1)]
@@ -269,7 +281,7 @@ def bake_fukui_jobs(
 
             results_sub = results_subdir_fn(mol, params)
             pbs = bake_pbs(job_prefix, mol, tag, spec, py_name, module_name,
-                           scratch_gb, mpi, omp_threads,
+                           scratch_gb, mpi, mpi_runner, omp_threads,
                            comment=f"{mol} {tag} (charge={charge})")
             with open(os.path.join(out_dir, f'submit_{mol}_{tag}.pbs'), 'w') as f: f.write(pbs)
 
