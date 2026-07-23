@@ -42,9 +42,10 @@ def bake_gpaw_run_script(mol, syms, ps, tag, charge, spec, params):
     outdir = f"results/{mol}_{xc}_{int(ecut)}eV"
     return f'''#!/usr/bin/env python3
 """{mol} {tag} — GPAW {xc} PW({int(ecut)}eV) charge={charge} spinpol={spinpol}
-Auto-generated. Saves raw electron density as .npy.
+Auto-generated. Saves raw electron density and ESP as .npy.
 """
 import os, numpy as np
+os.environ.setdefault('GPAW_SETUP_PATH', '/storage/praha1/home/prokop/gpaw-setups-24.1.0/gpaw-setups-24.1.0')
 from ase import Atoms
 from gpaw import GPAW, PW, FermiDirac
 
@@ -68,6 +69,11 @@ print(f"[{{MOL}}/{{TAG}}] E = {{E:.6f}} eV")
 rho = calc.get_all_electron_density()
 np.save(os.path.join(OUTDIR, f'rho_{{TAG}}.npy'), rho)
 print(f"  Saved rho_{{TAG}}.npy  shape={{rho.shape}}")
+
+# Save electrostatic potential (Hartree + nuclear, in eV)
+esp = calc.get_electrostatic_potential()
+np.save(os.path.join(OUTDIR, f'esp_{{TAG}}.npy'), esp)
+print(f"  Saved esp_{{TAG}}.npy  shape={{esp.shape}}")
 '''
 
 
@@ -93,9 +99,9 @@ def main():
         bake_run_fn=bake_gpaw_run_script,
         results_subdir_fn=results_subdir,
         job_prefix='fukui',
-        module_name='gpaw',
+        module_name='py-gpaw/24.1.0-gcc-10.2.1-fojjhkw',
         mpi=True,
-        mpi_runner='gpaw-python',
+        mpi_runner='python3',
         omp_threads='1',
         scratch_gb=10,
         params=params,
