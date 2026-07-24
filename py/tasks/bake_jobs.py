@@ -41,7 +41,8 @@ Usage example (PySCF):
     )
 """
 
-import os, shutil
+import os, shutil, secrets
+from collections import Counter
 import numpy as np
 from typing import Dict, List, Tuple, Callable, Optional
 
@@ -81,6 +82,59 @@ def spin_for_charge(nelec: int, charge: int) -> int:
     Even electrons -> 0 (singlet), odd -> 1 (doublet)."""
     n = nelec - charge
     return 0 if n % 2 == 0 else 1
+
+
+# ===================== ChemBook provenance snippets =====================
+
+def bake_chembook_init_code(chembook_id, n_atoms, elements, code, job_type='fukui', basis='', xc=''):
+    """Return Python code string for chembook.json init (status=pending).
+    Uses variables MOL, TAG, CHARGE, SPIN, OUTDIR from the baked script's scope.
+    Uses atexit to catch crashes and record status=failed."""
+    return f'''# --- ChemBook provenance ---
+import json as _cb_json, time as _cb_time, socket as _cb_sock, sys as _cb_sys
+from datetime import datetime, timezone as _cb_tz
+import atexit as _cb_atexit
+
+_cb_path = os.path.join(OUTDIR, 'chembook.json')
+_cb_node = {{
+    "chembook": {{"schema": "chembook.job.v0", "id": "{chembook_id}", "created": datetime.now(_cb_tz.utc).isoformat(timespec='microseconds'), "status": "pending"}},
+    "job": {{"type": "{job_type}", "name": MOL + "_" + TAG}},
+    "system": {{"n_atoms": {n_atoms}, "elements": {elements!r}, "charge": CHARGE, "spin": SPIN}},
+    "method": {{"code": "{code}", "basis": "{basis}", "method": "{xc}"}},
+    "provenance": {{"command": " ".join(_cb_sys.argv), "hostname": _cb_sock.gethostname(), "cwd": os.path.dirname(os.path.abspath(__file__))}},
+}}
+with open(_cb_path, 'w') as _cb_f:
+    _cb_json.dump(_cb_node, _cb_f, indent=2)
+_cb_t0 = _cb_time.perf_counter_ns()
+
+def _cb_on_exit():
+    if _cb_node["chembook"]["status"] == "pending":
+        _cb_dur = (_cb_time.perf_counter_ns() - _cb_t0) / 1e9
+        _cb_node["chembook"]["status"] = "failed"
+        _cb_node["provenance"]["duration_sec"] = _cb_dur
+        _cb_node["provenance"]["exit_code"] = 1
+        with open(_cb_path, 'w') as _cb_f:
+            _cb_json.dump(_cb_node, _cb_f, indent=2)
+_cb_atexit.register(_cb_on_exit)
+# --- end ChemBook init ---'''
+
+
+def bake_chembook_done_code(energy_expr=None, energy_unit='Ha'):
+    """Return Python code string for chembook.json finalize (status=done).
+    If energy_expr is None, no energy is recorded (e.g. rho_NA-only script)."""
+    if energy_expr is not None:
+        results_str = f'{{"energy_{energy_unit}": {energy_expr}, "converged": True}}'
+    else:
+        results_str = '{"converged": True}'
+    return f'''# --- ChemBook done ---
+_cb_dur = (_cb_time.perf_counter_ns() - _cb_t0) / 1e9
+_cb_node["chembook"]["status"] = "done"
+_cb_node["provenance"]["duration_sec"] = _cb_dur
+_cb_node["provenance"]["exit_code"] = 0
+_cb_node["results"] = {results_str}
+with open(_cb_path, 'w') as _cb_f:
+    _cb_json.dump(_cb_node, _cb_f, indent=2)
+# --- end ChemBook done ---'''
 
 
 # ===================== PBS templates =====================
@@ -273,7 +327,9 @@ def bake_fukui_jobs(
             params['cell'] = cell
 
         for tag, charge in charge_states:
-            py_content = bake_run_fn(mol, syms, ps, tag, charge, spec, params)
+            job_params = dict(params)
+            job_params['chembook_id'] = secrets.token_hex(6)
+            py_content = bake_run_fn(mol, syms, ps, tag, charge, spec, job_params)
             py_name = f'run_{mol}_{tag}.py'
             py_path = os.path.join(out_dir, py_name)
             with open(py_path, 'w') as f: f.write(py_content)
@@ -434,3 +490,73 @@ def bake_vibration_jobs(
         print(f"\nGenerated {len(cases)} scripts in {out_dir}")
         print(f"  cd {out_dir} && bash submit_all.sh")
     return len(cases)
+
+
+# ===================== Relax job baking =====================
+
+def bake_relax_jobs(
+    molecules: Dict[str, dict],
+    geom_dir: str,
+    out_dir: str,
+    bake_run_fn: Callable,
+    job_prefix: str = 'pyscf_relax',
+    module_name: str = 'mambaforge',
+    omp_threads: str = '$PBS_NUM_PPN',
+    scratch_gb: int = 20,
+    params: dict = None,
+    verbose: bool = True,
+) -> int:
+    """Bake standalone geometry optimization scripts + PBS for each molecule.
+
+    molecules: {name: {natoms, nelec, ncpus, mem, walltime, scratch_gb?}}
+    bake_run_fn: (mol, syms, ps, spec, params) -> python script source
+    """
+    if params is None:
+        params = {}
+    os.makedirs(out_dir, exist_ok=True)
+    geom_dst = os.path.join(out_dir, 'geometries')
+    os.makedirs(geom_dst, exist_ok=True)
+    pbs_paths = []
+
+    for mol, spec in molecules.items():
+        xyz_path = os.path.join(geom_dir, f'{mol}.xyz')
+        if not os.path.isfile(xyz_path):
+            print(f"  WARNING: {xyz_path} not found, skipping {mol}")
+            continue
+        shutil.copy2(xyz_path, geom_dst)
+
+        syms, ps = read_xyz(xyz_path)
+        job_params = dict(params)
+        job_params['chembook_id'] = secrets.token_hex(6)
+        py_content = bake_run_fn(mol, syms, ps, spec, job_params)
+        py_name = f'run_{mol}.py'
+        py_path = os.path.join(out_dir, py_name)
+        with open(py_path, 'w') as f:
+            f.write(py_content)
+        os.chmod(py_path, 0o755)
+
+        sg = spec.get('scratch_gb', scratch_gb)
+        pbs = bake_pbs(job_prefix, mol, 'relax', spec, py_name, module_name,
+                       scratch_gb=sg, mpi=False, omp_threads=omp_threads,
+                       comment=f'{mol} relax natoms={len(syms)}')
+        pbs_path = os.path.join(out_dir, f'submit_{mol}.pbs')
+        with open(pbs_path, 'w') as f:
+            f.write(pbs)
+        os.chmod(pbs_path, 0o755)
+        pbs_paths.append(pbs_path)
+
+        if verbose:
+            print(f"  {mol:25s}  natoms={len(syms):3d}  cpus={spec['ncpus']:2d}  "
+                  f"mem={spec['mem']:5s}  {spec['walltime']}")
+
+    submit_all = os.path.join(out_dir, 'submit_all.sh')
+    with open(submit_all, 'w') as f:
+        f.write('#!/bin/bash\n# Submit all geometry optimization jobs\nset -euo pipefail\n')
+        for p in pbs_paths:
+            f.write(f'qsub {os.path.basename(p)}\n')
+    os.chmod(submit_all, 0o755)
+
+    if verbose:
+        print(f"\nGenerated {len(pbs_paths)} scripts in {out_dir}")
+        print(f"  cd {out_dir} && bash submit_all.sh")
+    return len(pbs_paths)

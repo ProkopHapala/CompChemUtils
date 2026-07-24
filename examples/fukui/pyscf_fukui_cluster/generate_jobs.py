@@ -15,7 +15,8 @@ import os, sys, argparse
 # Add repo root to path so we can import py.tasks.bake_jobs
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
 
-from py.tasks.bake_jobs import bake_fukui_jobs, spin_for_charge
+from py.tasks.bake_jobs import bake_fukui_jobs, spin_for_charge, bake_chembook_init_code, bake_chembook_done_code
+from collections import Counter
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 GEOM_DIR = os.path.join(SCRIPT_DIR, 'geometries')
@@ -51,7 +52,15 @@ def bake_pyscf_run_script(mol, syms, ps, tag, charge, spec, params):
         geom_lines.append(f'    "{s} {p[0]:.6f} {p[1]:.6f} {p[2]:.6f}"')
     geom_str = ',\n'.join(geom_lines)
 
-    return f'''#!/usr/bin/env python3
+    chembook_id = params.get('chembook_id')
+    if chembook_id:
+        elements = dict(Counter(syms))
+        cb_init = bake_chembook_init_code(chembook_id, spec['natoms'], elements, 'pyscf', 'fukui', basis, xc)
+        cb_done = bake_chembook_done_code(energy_expr='mf.e_tot', energy_unit='Ha')
+    else:
+        cb_init = ''; cb_done = ''
+
+    result = f'''#!/usr/bin/env python3
 """{mol} {tag} — PySCF {xc}/{basis} charge={charge} spin={spin}
 Auto-generated. Saves electron density and ESP as .cube and .npy.
 """
@@ -65,6 +74,7 @@ RESOLUTION = {resolution}; MARGIN = {margin}
 
 OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "{outdir}")
 os.makedirs(OUTDIR, exist_ok=True)
+@@CHEMBOOK_INIT@@
 
 mol = gto.Mole(
     atom=[
@@ -140,7 +150,9 @@ with open(esp_path, 'r') as f:
 esp_data = esp_data.reshape(nx, ny, nz)
 np.save(os.path.join(OUTDIR, f'esp_{{TAG}}.npy'), esp_data)
 print(f"  Npy:  esp_{{TAG}}.npy  shape={{esp_data.shape}}")
+@@CHEMBOOK_DONE@@
 '''
+    return result.replace('@@CHEMBOOK_INIT@@', cb_init).replace('@@CHEMBOOK_DONE@@', cb_done)
 
 
 def bake_rho_na_script(mol, syms, ps, tag, charge, spec, params):
@@ -154,7 +166,15 @@ def bake_rho_na_script(mol, syms, ps, tag, charge, spec, params):
         geom_lines.append(f'    "{s} {p[0]:.6f} {p[1]:.6f} {p[2]:.6f}"')
     geom_str = ',\n'.join(geom_lines)
 
-    return f'''#!/usr/bin/env python3
+    chembook_id = params.get('chembook_id')
+    if chembook_id:
+        elements = dict(Counter(syms))
+        cb_init = bake_chembook_init_code(chembook_id, spec['natoms'], elements, 'pyscf', 'density', basis, xc)
+        cb_done = bake_chembook_done_code(energy_expr=None)
+    else:
+        cb_init = ''; cb_done = ''
+
+    result = f'''#!/usr/bin/env python3
 """{mol} rho_NA — PySCF {basis} neutral atom density (SAD initial guess)
 No SCF, just superposition of atomic densities.
 """
@@ -162,12 +182,13 @@ import os, numpy as np
 from pyscf import gto, dft
 from pyscf.tools import cubegen
 
-MOL = "{mol}"
-BASIS = "{basis}"
+MOL = "{mol}"; TAG = "NA"; CHARGE = 0; SPIN = 0
+BASIS = "{basis}"; XC = "{xc}"
 RESOLUTION = {resolution}; MARGIN = {margin}
 
 OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "{outdir}")
 os.makedirs(OUTDIR, exist_ok=True)
+@@CHEMBOOK_INIT@@
 
 mol = gto.Mole(
     atom=[
@@ -198,7 +219,9 @@ with open(na_cube, 'r') as f:
 na_data = na_data.reshape(nx, ny, nz)
 np.save(os.path.join(OUTDIR, 'rho_NA.npy'), na_data)
 print(f"  Npy:  rho_NA.npy  shape={{na_data.shape}}")
+@@CHEMBOOK_DONE@@
 '''
+    return result.replace('@@CHEMBOOK_INIT@@', cb_init).replace('@@CHEMBOOK_DONE@@', cb_done)
 
 
 def results_subdir(mol, params):

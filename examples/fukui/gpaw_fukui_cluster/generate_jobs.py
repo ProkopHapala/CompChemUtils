@@ -16,7 +16,8 @@ import numpy as np
 # Add repo root to path so we can import py.tasks.bake_jobs
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
 
-from py.tasks.bake_jobs import bake_fukui_jobs, read_xyz, box_positions, spin_for_charge, B2A
+from py.tasks.bake_jobs import bake_fukui_jobs, read_xyz, box_positions, spin_for_charge, B2A, bake_chembook_init_code, bake_chembook_done_code
+from collections import Counter
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 GEOM_DIR = os.path.join(SCRIPT_DIR, 'geometries')
@@ -40,7 +41,16 @@ def bake_gpaw_run_script(mol, syms, ps, tag, charge, spec, params):
     cell = params['cell']
     spinpol = spin_for_charge(spec['nelec'], charge) != 0
     outdir = f"results/{mol}_{xc}_{int(ecut)}eV"
-    return f'''#!/usr/bin/env python3
+
+    chembook_id = params.get('chembook_id')
+    if chembook_id:
+        elements = dict(Counter(syms))
+        cb_init = bake_chembook_init_code(chembook_id, spec['natoms'], elements, 'gpaw', 'fukui', str(int(ecut))+'eV', xc)
+        cb_done = bake_chembook_done_code(energy_expr='E', energy_unit='eV')
+    else:
+        cb_init = ''; cb_done = ''
+
+    result = f'''#!/usr/bin/env python3
 """{mol} {tag} — GPAW {xc} PW({int(ecut)}eV) charge={charge} spinpol={spinpol}
 Auto-generated. Saves raw electron density and ESP as .npy.
 """
@@ -49,12 +59,13 @@ os.environ.setdefault('GPAW_SETUP_PATH', '/storage/praha1/home/prokop/gpaw-setup
 from ase import Atoms
 from gpaw import GPAW, PW, FermiDirac
 
-MOL = "{mol}"; TAG = "{tag}"; CHARGE = {charge}; SPINPOL = {spinpol}
+MOL = "{mol}"; TAG = "{tag}"; CHARGE = {charge}; SPINPOL = {spinpol}; SPIN = 1 if SPINPOL else 0
 ECUT = {ecut}; XC = "{xc}"
 B2A = {B2A}
 
 OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "{outdir}")
 os.makedirs(OUTDIR, exist_ok=True)
+@@CHEMBOOK_INIT@@
 
 atoms = Atoms(symbols={syms!r}, positions={ps.tolist()!r}, cell={cell.tolist()!r}, pbc=True)
 calc = GPAW(mode=PW(ECUT), xc=XC, charge=CHARGE, spinpol=SPINPOL,
@@ -74,7 +85,9 @@ print(f"  Saved rho_{{TAG}}.npy  shape={{rho.shape}}")
 esp = calc.get_electrostatic_potential()
 np.save(os.path.join(OUTDIR, f'esp_{{TAG}}.npy'), esp)
 print(f"  Saved esp_{{TAG}}.npy  shape={{esp.shape}}")
+@@CHEMBOOK_DONE@@
 '''
+    return result.replace('@@CHEMBOOK_INIT@@', cb_init).replace('@@CHEMBOOK_DONE@@', cb_done)
 
 
 def results_subdir(mol, params):
