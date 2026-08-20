@@ -12,6 +12,7 @@ Per-folder file indexes live in [`py/README.md`](py/README.md) and subdirectory 
 | Backends | `py/interfaces/` | [`py/interfaces/README.md`](py/interfaces/README.md) |
 | Cluster / HPC | `py/cluster/` | [`py/cluster/README.md`](py/cluster/README.md) |
 | Domain builders (ASE) | `py/system_specific/` | [`py/system_specific/README.md`](py/system_specific/README.md) |
+| Job metadata (ChemBook) | `py/chembook/` | [`py/chembook/README.md`](py/chembook/README.md) |
 
 ---
 
@@ -27,6 +28,7 @@ Supporting modules sit beside the three layers but must not break the split:
 - **`plotUtils.py`**, **`molVisApp.py`** — diagnostics and visualization only; no compute in core libraries
 - **`py/cluster/`** — PBS script generation and interactive-job env capture (Metacentrum)
 - **`py/system_specific/`** — ASE-dependent surface/cluster builders; optional, not imported by tasks
+- **`py/chembook/`** — job metadata protocol; every simulation directory is a "node" with a `chembook.json` (provenance, system, method, results). See `chembook-jobs` skill.
 
 Any task can pair with any backend that declares the required capability.
 
@@ -245,6 +247,25 @@ Overlap with slab helpers in `interfaces/gpaw.py` is intentional: `gpaw.py` targ
 
 ---
 
+### 6. Job Metadata Layer — ChemBook (`py/chembook/`)
+
+See [`py/chembook/README.md`](py/chembook/README.md) and the `chembook-jobs` skill (`doc/AGENTS/skills/chembook-jobs/SKILL.md`). Full design rationale: [`doc/ChemBook.chat.md`](doc/ChemBook.chat.md).
+
+A filesystem-based metadata protocol, not a database. **A directory becomes a node by containing `chembook.json`** — discovery walks the tree, no fixed layout required. The schema (`chembook.job.v0`) is dict-validated by `schema.py` with a minimal compulsory set (`chembook.{schema,id,created,status}`, `job.type`, `system.{n_atoms,elements}`, `method.code`, `provenance.command`) plus conditional fields when finished (`provenance.{duration_sec,exit_code}`).
+
+| File | Role |
+|------|------|
+| `schema.py` | `SCHEMA_VERSION`, `COMPULSORY_FIELDS`, `validate()` → `(errors, warnings)`, `create_skeleton()` |
+| `core.py` | `generate_id()` (12-hex, collision-checked), `resolve_true_path()` (symlink-aware), `read_node`/`write_node`/`walk_nodes`/`find_by_id`, `run_command_and_record()`, `get_git_commit()`, `now_iso()` |
+| `cli.py` | `python -m py.chembook {init,run,validate,scan}` |
+| `__main__.py` | Entry point |
+
+**Integration with the task layer:** `py/tasks/bake_jobs.py` exposes `bake_chembook_init_code()` / `bake_chembook_done_code()` which emit Python snippets templated into baked cluster scripts via `@@CHEMBOOK_INIT@@` / `@@CHEMBOOK_DONE@@` placeholders. Example users: `examples/fukui/{pyscf_fukui_cluster,gpaw_fukui_cluster,pyscf_relax_hbonds}/generate_jobs.py` and `examples/MetalTip_Molecule_interaction/generate_metal_geometries.py`.
+
+**Rule for LLMs:** when creating, baking, or running any QC job, the output directory MUST end up with a `chembook.json`. Three application modes (CLI wrap / bake into script / write directly) are documented in the `chembook-jobs` skill — pick one before producing outputs.
+
+---
+
 ## Method/Basis Parameter Mapping
 
 ### Method strings (backend-specific interpretation):
@@ -426,6 +447,7 @@ Thin CLIs with outputs (`start.xyz`, `relaxed.xyz`, `scan.dat`, `scan.png`): [`e
 9. **NO plotting in core**: Use `plotUtils.py` / `molVisApp.py` for diagnostics; tasks and backends return data only
 10. **NO hard-coded paths**: Resolve tools and datasets via `config_loader` or environment variables; document externals in `DEPEND.md`
 11. **KEEP ASE optional**: Metal surface builders live in `system_specific/` or backend modules — not in `AtomicSystem` / tasks
+12. **WRITE `chembook.json` for every job**: Any directory that holds simulation outputs is a ChemBook node — write the metadata file (provenance, system, method, status) before running and update it after. See `chembook-jobs` skill.
 
 ---
 

@@ -8,4 +8,5 @@ Backend-agnostic orchestration of QC calculation types — dispatches to `Calcul
 - **vibrations.py** — harmonic frequency/mode workflow (`vibrations`)
 - **interaction_energy.py** — fragment-based binding energy, E_int = E_whole − E_frag1 − E_frag2, optional per-fragment relaxation
 - **bake_jobs.py** — generic Fukui cluster job baker: XYZ ingest, charge-state loops (N/N±1), PBS scripts, backend-specific run-script callbacks (`bake_fukui_jobs`, `bake_pbs`)
-- **__init__.py** — re-exports result types and `interaction_energy`, `bake_fukui_jobs`
+- **metal_tip.py** — metal slab relaxation workflow for the MetalTip × Molecule interaction study: `relax_metal_system()` (core function, freezes bottom layers + GPAW dipole correction + ChemBook metadata), `build_relax_backend()` (GPAWBackend factory with dipole defaults), `load_slab_from_job()` (load geometry + metadata from ChemBook job dir)
+- **__init__.py** — re-exports result types, `interaction_energy`, `bake_fukui_jobs`, `relax_metal_system`, `build_relax_backend`, `load_slab_from_job`

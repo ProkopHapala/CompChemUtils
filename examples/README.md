@@ -18,6 +18,7 @@ Runnable workflows and study scripts — thin CLIs on top of `py/` (geometry, ta
 | Geometry / FF debugging snippets | `pyutils/` | [`pyutils/README.md`](pyutils/README.md) |
 | Molecule attachment / polymerization | `tAttach/` | [`tAttach/README.md`](tAttach/README.md) |
 | Psi4 RESP + scans | `tPsi4resp/` | [`tPsi4resp/README.md`](tPsi4resp/README.md) |
+| Metal surface × molecule interaction study | `MetalTip_Molecule_interaction/` | [`MetalTip_Molecule_interaction/README.md`](MetalTip_Molecule_interaction/README.md) |
 | Molecular vibrations (PySCF, DFTB+, MMFF) | `tSiNCs/` | [`tSiNCs/README.md`](tSiNCs/README.md) |
 
 Many scripts predate the `py/` refactor and still import legacy `pyBall` — prefer `py.*` for new work.
