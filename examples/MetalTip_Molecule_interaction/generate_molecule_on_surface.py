@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
-"""generate_molecule_on_surface.py — place molecules on relaxed Cu/Ag/Au FCC(111) slabs (bare + adatom).
+"""generate_molecule_on_surface.py — place molecules on relaxed Cu/Ag/Au FCC(111) slabs.
 
-Phase 2 of the metal-tip × molecule interaction study. Reads **relaxed** slab geometries
+Phase 2/2c of the metal-tip × molecule interaction study. Reads **relaxed** slab geometries
 from `jobs_coinage/results_{Metal}_{variant}_111_3x3x3/relaxed.xyz` (Phase 1 output).
-Molecule is oriented so its electron lone pair faces the target metal atom at ~2.4 Å
-(epair-to-metal distance). Uses existing infrastructure: AtomicSystem.add_electron_pairs(),
-geom_engine._find_host_atom(), _mol_frame_from_epairs(), _transform_positions().
+Molecule is oriented so its electron lone pair faces the target metal atom at ~2.9 Å
+(host-to-metal distance). Uses AtomicSystem.add_electron_pairs(), geom_engine
+_find_host_atom()/_mol_frame_from_epairs()/_transform_positions().
 
-Binary hydrides (H2O, H2S, NH3, PH3) generated via geom_engine.make_hydride() from
-experimental bond lengths and H-X-H angles. Non-hydrides (HCN, CH2O, CH2NH) loaded
-from XYZ files. Cell z-height fixed to 22 Å for consistent vacuum across all systems.
+Supports all 5 slab variants (bare, adatom, dimer, trimer, row). For multi-adatom variants,
+`find_adatom_cluster()` identifies the cluster axis and target atom (corner for trimer).
+A 90° CCW z-rotation is applied when H atoms are aligned with the adatom chain, ensuring
+the molecule plane is perpendicular to it — minimizes steric hindrance with neighboring adatoms.
+
+Molecules: binary hydrides (H2O, H2S, NH3, PH3 via make_hydride()), HCN, CH2O, CH2NH,
+and aromatic rings (pyridine, furan, thiophene, pyrrol from XYZ). Cell z fixed to 22 Å.
 
 Output: systems/<Metal>/<variant>_<molecule>_111_3x3x3/input/  with CONTCAR + start.xyz.
 
 Usage:
-    python generate_molecule_on_surface.py                              # all 3 metals, 2 variants, 7 molecules
-    python generate_molecule_on_surface.py --metals Cu --molecules H2O  # subset
-    python generate_molecule_on_surface.py --dist 2.4                   # custom epair-to-metal distance
+    python generate_molecule_on_surface.py                                          # all defaults
+    python generate_molecule_on_surface.py --metals Cu --molecules pyridine furan   # subset
+    python generate_molecule_on_surface.py --dist 2.9                               # custom host-metal distance
 """
 import os, sys, json, argparse
 import numpy as np
@@ -37,6 +41,10 @@ NON_HYDRIDE_XYZ = {
     'HCN':  os.path.join(REPO, 'data', 'xyz', 'HCN.xyz'),
     'CH2O': os.path.join(REPO, 'data', 'xyz', 'CH2O.xyz'),
     'CH2NH':os.path.join(REPO, 'data', 'xyz', 'CH2NH.xyz'),
+    'pyridine': os.path.join(REPO, 'data', 'xyz', 'pyridine.xyz'),
+    'furan': os.path.join(REPO, 'data', 'xyz', 'furan.xyz'),
+    'thiophene': os.path.join(REPO, 'data', 'xyz', 'thiophene.xyz'),
+    'pyrrol': os.path.join(REPO, 'data', 'xyz', 'pyrrol.xyz'),
 }
 MOLECULES = HYDRIDES + list(NON_HYDRIDE_XYZ.keys())
 
@@ -75,34 +83,85 @@ def find_top_atom(ps, exclude_idx=None):
 
 
 def find_adatom(syms, ps):
-    """Find adatom: the single highest-z atom that is the same element as the slab metal."""
+    """Find adatom target: for single adatom, return its index.
+    For multi-adatom (dimer/trimer/row), return the index of the adatom closest to the cluster center."""
     z = ps[:, 2]
     z_max = z.max()
-    # Atoms at the top z level
     top_mask = np.abs(z - z_max) < 0.01
     top_indices = np.where(top_mask)[0]
-    # The adatom is the one with the fewest neighbors at similar z (it sits above the surface layer)
-    # For a 3x3x3 slab with 1 adatom: the topmost atom is the adatom
-    # But we need to distinguish from surface layer atoms
-    # Simple: the adatom is the one with highest z, and there should be only 1 at that exact height
     if len(top_indices) == 1:
         return int(top_indices[0])
-    # If multiple at same z, pick the one that's clearly above the surface layer
-    # Sort by z descending, look for a gap
+    # Multiple atoms at top z: find the gap between adatom layer and surface layer
     sorted_z = np.sort(z)[::-1]
-    # Find gap between adatom and surface layer
     for i in range(len(sorted_z) - 1):
         if sorted_z[i] - sorted_z[i + 1] > 0.5:
-            # Atoms above this gap are adatoms
             adatom_z = sorted_z[i]
-            return int(np.where(np.abs(z - adatom_z) < 0.01)[0][0])
+            adatom_indices = np.where(np.abs(z - adatom_z) < 0.01)[0]
+            if len(adatom_indices) == 1:
+                return int(adatom_indices[0])
+            # Multi-adatom: pick the one closest to the centroid of the adatom cluster
+            centroid = ps[adatom_indices, :2].mean(axis=0)
+            dists = np.linalg.norm(ps[adatom_indices, :2] - centroid, axis=1)
+            return int(adatom_indices[np.argmin(dists)])
     # Fallback: just return the highest
     return int(np.argmax(z))
 
+def find_adatom_cluster(syms, ps, variant):
+    """Find adatom target and cluster axis for multi-adatom variants.
+    Returns (target_idx, axis_xy) where axis_xy is a unit vector in the xy plane.
+    For dimer/row: axis = direction along the adatom chain.
+    For trimer: pick a corner atom, axis = direction from cluster center to that corner.
+    For bare/adatom: returns (target_idx, None) — no preferred rotation."""
+    z = ps[:, 2]
+    z_max = z.max()
+    # Find adatom layer by gap in z
+    sorted_z = np.sort(z)[::-1]
+    adatom_indices = None
+    for i in range(len(sorted_z) - 1):
+        if sorted_z[i] - sorted_z[i + 1] > 0.5:
+            adatom_z = sorted_z[i]
+            adatom_indices = np.where(np.abs(z - adatom_z) < 0.01)[0]
+            break
+    if adatom_indices is None:
+        # No gap found — single or no adatom
+        target = find_adatom(syms, ps)
+        return target, None
+    if len(adatom_indices) <= 1:
+        return int(adatom_indices[0]) if len(adatom_indices) == 1 else int(np.argmax(z)), None
+    # Multi-adatom
+    centroid = ps[adatom_indices, :2].mean(axis=0)
+    if variant == 'trimer' and len(adatom_indices) >= 3:
+        # Pick a corner atom (furthest from center), axis = center→corner
+        dists = np.linalg.norm(ps[adatom_indices, :2] - centroid, axis=1)
+        corner_local = np.argmax(dists)
+        target_idx = int(adatom_indices[corner_local])
+        axis = ps[target_idx, :2] - centroid
+        axis_xy = axis / (np.linalg.norm(axis) + 1e-12)
+        return target_idx, axis_xy
+    else:
+        # Dimer or row: axis = principal direction of the adatom cluster
+        # Use the direction from first to last adatom (or PCA)
+        adatom_xy = ps[adatom_indices, :2]
+        if len(adatom_indices) == 2:
+            axis = adatom_xy[1] - adatom_xy[0]
+        else:
+            # Row: use PCA — first principal component
+            centered = adatom_xy - centroid
+            U, S, Vt = np.linalg.svd(centered, full_matrices=False)
+            axis = Vt[0]
+        axis_xy = axis / (np.linalg.norm(axis) + 1e-12)
+        # Target: closest to centroid
+        dists = np.linalg.norm(adatom_xy - centroid, axis=1)
+        target_idx = int(adatom_indices[np.argmin(dists)])
+        return target_idx, axis_xy
 
-def place_molecule_on_surface(slab_syms, slab_ps, cell, mol_syms, mol_ps, target_idx, dist=2.4):
+
+def place_molecule_on_surface(slab_syms, slab_ps, cell, mol_syms, mol_ps, target_idx, dist=2.4, up_dir=None):
     """Place molecule on surface so its lone pair faces target atom at given distance.
     mol_syms/mol_ps: molecule symbols and positions (without electron pairs).
+    up_dir: optional (x,y) direction for in-plane rotation of molecule.
+            The molecule plane will be perpendicular to this direction.
+            If None, uses default (x-axis reference).
     Returns (combined_syms, combined_ps, mol_host_idx_in_combined)."""
     # Build AtomicSystem from molecule arrays for epair computation
     mol = AtomicSystem(enames=list(mol_syms), apos=mol_ps.copy())
@@ -163,20 +222,34 @@ def place_molecule_on_surface(slab_syms, slab_ps, cell, mol_syms, mol_ps, target
     up_t = ge._safe_up_from_ref(fwd_t, (1.0, 0.0, 0.0))
     T_rows = au.makeRotMat(fwd_t, up_t)
 
-    # Now: epair_world = target_origin + T^T @ (M @ (-fw_m * 0.5))
-    # M @ fw_m = [1,0,0], so M @ (-fw_m * 0.5) = [-0.5, 0, 0]
-    # T^T @ [-0.5, 0, 0] = -0.5 * T^T @ [1,0,0] = -0.5 * fwd_t = -0.5 * [0,0,1] = [0,0,-0.5]
-    # epair_world = target_origin + [0, 0, -0.5]
-    # We want epair at target_pos + [0, 0, dist] (above metal by dist)
-    # target_origin = target_pos + [0, 0, dist + 0.5]
-
     target_origin = target_pos + np.array([0.0, 0.0, dist + 0.5])
     mol_ps2 = ge._transform_positions(mol_ps, origin_m, M_rows, T_rows, target_origin)
 
     # Combine
     combined_syms = list(slab_syms) + list(mol_es)
     combined_ps = np.vstack([slab_ps, mol_ps2])
-    mol_host_idx = len(slab_syms) + list(mol_es).index(host_element)  # first occurrence in kept list
+    mol_host_idx = len(slab_syms) + list(mol_es).index(host_element)
+
+    # For multi-adatom variants, ensure H atoms are perpendicular to the adatom chain.
+    # Check if H spread is along the cluster axis; if so, rotate 90° CCW around z.
+    if up_dir is not None:
+        h_indices = [i for i in range(len(slab_syms), len(combined_ps)) if combined_syms[i] == 'H']
+        if h_indices:
+            h_rel = combined_ps[h_indices, :2] - target_pos[:2]
+            # Project H positions onto cluster axis and perpendicular
+            axis = np.array(up_dir[:2]); axis = axis / (np.linalg.norm(axis) + 1e-12)
+            perp = np.array([-axis[1], axis[0]])
+            spread_axis = h_rel @ axis
+            spread_perp = h_rel @ perp
+            along = spread_axis.max() - spread_axis.min()
+            across = spread_perp.max() - spread_perp.min()
+            if along > across:
+                # H atoms are along the chain — rotate 90° CCW
+                c, s = 0.0, 1.0
+                Rz = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+                for i in range(len(slab_syms), len(combined_ps)):
+                    p = combined_ps[i] - target_pos
+                    combined_ps[i] = Rz @ p + target_pos
 
     return combined_syms, combined_ps, mol_host_idx
 
@@ -242,7 +315,7 @@ def read_relaxed_xyz(path):
 def main():
     parser = argparse.ArgumentParser(description="Generate molecule-on-surface geometries")
     parser.add_argument('--metals', nargs='+', default=['Cu', 'Ag', 'Au'])
-    parser.add_argument('--variants', nargs='+', default=['bare', 'adatom'])
+    parser.add_argument('--variants', nargs='+', default=['bare', 'adatom', 'dimer', 'trimer', 'row'])
     parser.add_argument('--molecules', nargs='+', default=MOLECULES)
     parser.add_argument('--dist', type=float, default=2.4, help="Epair-to-metal distance (Å)")
     parser.add_argument('--systems-dir', default=None, help="Path to systems/ output directory")
@@ -262,13 +335,15 @@ def main():
 
             slab_syms, slab_ps, cell = read_relaxed_xyz(relaxed_xyz)
 
-            # Find target atom: adatom if variant has one, else top surface atom
-            if variant == 'adatom':
-                target_idx = find_adatom(slab_syms, slab_ps)
+            # Find target atom and cluster axis for in-plane rotation
+            if variant in ('adatom', 'dimer', 'trimer', 'row'):
+                target_idx, axis_xy = find_adatom_cluster(slab_syms, slab_ps, variant)
             else:
                 target_idx = find_top_atom(slab_ps)
+                axis_xy = None
 
-            print(f"\n{metal}/{variant} (relaxed): target atom #{target_idx} at z={slab_ps[target_idx, 2]:.3f}")
+            axis_str = f"axis=({axis_xy[0]:.2f},{axis_xy[1]:.2f})" if axis_xy is not None else "axis=None"
+            print(f"\n{metal}/{variant} (relaxed): target atom #{target_idx} at z={slab_ps[target_idx, 2]:.3f}  {axis_str}")
 
             for mol_name in args.molecules:
                 # Get molecule geometry: hydrides from make_hydride, others from XYZ
@@ -289,7 +364,7 @@ def main():
 
                 try:
                     combined_syms, combined_ps, mol_host_idx = place_molecule_on_surface(
-                        slab_syms, slab_ps, cell, mol_syms, mol_ps, target_idx, dist=args.dist)
+                        slab_syms, slab_ps, cell, mol_syms, mol_ps, target_idx, dist=args.dist, up_dir=axis_xy)
                 except Exception as e:
                     print(f"  SKIP {mol_name}: {e}")
                     continue

@@ -137,3 +137,59 @@ python generate_relax_jobs.py --metals Cu Ag Au --variants bare adatom \
     --molecules H2O H2S NH3 PH3 HCN CH2O CH2NH --outdir jobs_mol_on_surf
 cd jobs_mol_on_surf && bash submit_all.sh   # submit to Metacentrum
 ```
+
+## Phase 2c: Aromatic molecules on all slab variants
+
+Extended molecule set with 4 aromatic ring molecules (pyridine, furan, thiophene, pyrrol) on
+**all 5 slab variants** (bare, adatom, dimer, trimer, row) for Cu, Ag, Au — 60 geometries total.
+Also generated 63 additional geometries for the 7 original molecules on dimer/trimer/row variants.
+
+### Molecules
+- **pyridine** (N host, 1 epair) — nitrogen lone pair faces adatom
+- **furan** (O host, 2 epairs) — oxygen lone pairs face adatom
+- **thiophene** (S host, 2 epairs) — sulfur lone pairs face adatom
+- **pyrrol** (N host, 1 epair) — nitrogen lone pair faces adatom
+
+### Orientation
+- Molecule placed via electron pair orientation toward target adatom (epair → metal at ~2.9 Å)
+- For multi-adatom variants (dimer, trimer, row): H atoms rotated perpendicular to adatom chain
+  via 90° CCW z-rotation when needed (checked by projecting H spread onto cluster axis)
+- `find_adatom_cluster()` identifies cluster axis and corner atom (trimer) for placement
+
+### Key parameters
+- Metals: Cu, Ag, Au
+- Variants: bare, adatom, dimer, trimer, row
+- Molecules: pyridine, furan, thiophene, pyrrol
+- Host-metal distance: 2.9 Å
+- Cell z: 22 Å
+- Total: 3 × 5 × 4 = 60 geometries (+ 63 from Phase 2d below)
+
+### Directory structure
+```
+systems/<Metal>/
+  bare_pyridine_111_3x3x3/input/CONTCAR
+  adatom_furan_111_3x3x3/input/CONTCAR
+  dimer_thiophene_111_3x3x3/input/CONTCAR
+  trimer_pyrrol_111_3x3x3/input/CONTCAR
+  row_pyridine_111_3x3x3/input/CONTCAR
+  ...
+```
+
+### Usage
+```bash
+python generate_molecule_on_surface.py --metals Cu Ag Au --variants bare adatom dimer trimer row \
+    --molecules pyridine furan thiophene pyrrol
+python plot_pyridine_init.py    # generate inspection plots in init_plots_pyridine/
+```
+
+## Phase 2c-jobs: Relaxation jobs (aromatic molecules)
+
+60 GPAW relax jobs baked in `jobs_mol_on_surf_3/`. Same parameters as Phase 2b.
+Job IDs: 23064466–23064526 (pbs-m1.metacentrum.cz).
+
+### Usage
+```bash
+python generate_relax_jobs.py --metals Cu Ag Au --variants bare adatom dimer trimer row \
+    --molecules pyridine furan thiophene pyrrol --outdir jobs_mol_on_surf_3
+cd jobs_mol_on_surf_3 && bash submit_all.sh
+```
