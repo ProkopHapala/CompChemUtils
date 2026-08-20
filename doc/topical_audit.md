@@ -408,6 +408,12 @@ Systematic study of coordination bond strength between small molecules and FCC(1
 | [`py/tasks/metal_tip.py`](../py/tasks/metal_tip.py) — `build_relax_backend` | active | Factory for GPAWBackend with dipole correction defaults (spec §5.1, §5.8) |
 | [`py/tasks/metal_tip.py`](../py/tasks/metal_tip.py) — `load_slab_from_job` | active | Load geometry + metadata from ChemBook job directory (`input/CONTCAR` + `meta.json`) |
 | [`examples/MetalTip_Molecule_interaction/generate_metal_geometries.py`](../examples/MetalTip_Molecule_interaction/generate_metal_geometries.py) | active | Phase 1 CLI: 41 geometries (16 metals × {bare, adatom} + Cu/Ag/Au × {dimer, trimer, row}); ChemBook protocol with `meta.json`/`README.md` per node, `input/CONTCAR` + `input/start.xyz`, preview plots as `<variant>.png` |
+| [`examples/MetalTip_Molecule_interaction/generate_molecule_on_surface.py`](../examples/MetalTip_Molecule_interaction/generate_molecule_on_surface.py) | active | Phase 2 CLI: 42 molecule-on-surface geometries (Cu/Ag/Au × bare/adatom × 7 molecules). Reads **relaxed** slabs from `jobs_coinage/results_*/relaxed.xyz`. Orients molecule via electron pair → metal atom at ~2.4 Å. Uses `make_hydride()` for binary hydrides, XYZ for HCN/CH2O/CH2NH. Cell z fixed to 22 Å |
+| [`examples/MetalTip_Molecule_interaction/make_hydrides.py`](../examples/MetalTip_Molecule_interaction/make_hydrides.py) | active | Generate XYZ files for binary hydrides (H2O, H2S, NH3, PH3, CH4, SiH4) using `make_hydride()` |
+| [`examples/MetalTip_Molecule_interaction/generate_relax_jobs.py`](../examples/MetalTip_Molecule_interaction/generate_relax_jobs.py) — `--molecules` | active | Phase 2b: bake GPAW relax jobs for molecule-on-surface geometries. 42 jobs: PBE PW(400eV) gamma-point, 8 CPUs, 23h walltime, `luna` queue (magma.fzu.cz) |
+| [`py/geom_engine.py`](../py/geom_engine.py) — `make_hydride` | active | Universal XH_n generator from bond length + H-X-H angle with Cnv symmetry. `HYDRIDE_PARAMS` dict with experimental values for H2O, H2S, NH3, PH3, CH4, SiH4 |
+| [`py/geom_engine.py`](../py/geom_engine.py) — `_find_host_atom`, `_mol_frame_from_epairs` | active | Molecule-on-surface orientation: find lone-pair-bearing atom (O, N, S, P), build molecular frame from electron pair directions |
+| [`py/AtomicSystem.py`](../py/AtomicSystem.py) — `VALENCE_DICT` | active | Extended with S (2 bonds + 2 epairs, like O) and P (3 bonds + 1 epair, like N) for electron pair generation |
 | [`examples/MetalTip_Molecule_interaction/benchmark_cu_relax.py`](../examples/MetalTip_Molecule_interaction/benchmark_cu_relax.py) | active | Benchmark script (spec §11.1): Cu bare + adatom, gamma-point, PBE, dipole correction; verifies frozen atoms + adatom position; supports `--mode export` |
 | [`examples/fukui/`](../examples/fukui/README.md) | active | Fukui functions on metal clusters and M(111)+adatom slabs (preceding work) |
 | [`examples/AgTip_CarboxAnhydride_bonds/`](../examples/AgTip_CarboxAnhydride_bonds/README.md) | active | Ag tip + anhydride adsorption (preceding work, M₄ cluster model) |
@@ -424,9 +430,10 @@ Systematic study of coordination bond strength between small molecules and FCC(1
 
 - FCC lattice constants for hypothetical FCC phases (Ti, V, Cr, Mn, Fe, Co, Zn, Mo, W) are volume-preserving estimates — Phase 0 bulk EOS will self-consistently determine them (spec §3.2).
 - Multi-adatom configs (dimer/trimer/row) generated only for Cu, Ag, Au — other metals bare+adatom only.
-- Molecule placement and interaction energy calculations not yet implemented (Phase 2+).
+- **Phase 2 relaxation jobs submitted** (42 jobs, `luna` queue, magma.fzu.cz) — awaiting results.
+- No empirical D3 corrections available (no `dftd3` binary on cluster, no GPAW D3 module). vdW-DF functionals available (`vdW-DF`, `vdW-DF2`, `optB88-vdW`, `optPBE-vdW`) for future refinement.
+- Interaction energy calculations not yet implemented (Phase 3 — requires separate molecule + slab SCF calculations).
 - **GPAW NumPy 2.x incompatibility**: GPAW 25.7.0 compiled against NumPy 1.x but system has NumPy 2.2.6 — local execution blocked until environment fixed (downgrade numpy<2 or install GPAW in conda `psi4env` which has NumPy 1.24.3).
-- Relaxation infrastructure implemented but not yet benchmarked — `benchmark_cu_relax.py` export mode verified; local mode pending GPAW environment fix.
 
 ---
 

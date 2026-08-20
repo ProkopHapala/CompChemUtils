@@ -1,28 +1,29 @@
 #!/usr/bin/env python3
-"""generate_relax_jobs.py — bake self-contained GPAW relax scripts + PBS for metal slabs.
+"""generate_relax_jobs.py — bake self-contained GPAW relax scripts + PBS for metal slabs and molecule-on-surface.
 
-Reads pre-generated geometries from systems/<Metal>/<variant>_111_3x3x3/ (produced
-by generate_metal_geometries.py) and bakes standalone runner scripts that can be
-submitted to Metacentrum via qsub.
+Two modes:
+  1. Slab-only (default): reads systems/<Metal>/<variant>_111_3x3x3/ (from generate_metal_geometries.py)
+  2. Molecule-on-surface (--molecules): reads systems/<Metal>/<variant>_<molecule>_111_3x3x3/
+     (from generate_molecule_on_surface.py). Frozen indices fixed to bottom 18 atoms.
 
 Each job:
-  - Loads the slab geometry (CONTCAR) with cell + positions
+  - Loads the geometry (CONTCAR) with cell + positions
   - Freezes bottom 2 layers (FixAtoms)
   - Runs GPAW PBE PW(400eV) gamma-point with FermiDirac(0.05) smearing + dipole correction
-  - Saves relaxed.xyz, final.traj, energy, and ChemBook metadata
+  - Saves relaxed.xyz, final.traj, density/potential cubes, planar averages, and ChemBook metadata
 
 Output structure:
-  jobs/
-    run_<Metal>_<variant>.py          # self-contained GPAW runner
-    submit_<Metal>_<variant>.pbs      # PBS wrapper for Metacentrum
+  jobs/  (or jobs_mol_on_surf/)
+    run_<Metal>_<variant>.py          # slab-only runner
+    run_<Metal>_<variant>_<mol>.py    # molecule-on-surface runner
+    submit_<Metal>_<variant>.pbs      # PBS wrapper
     submit_all.sh                     # qsub all jobs
 
 Usage:
     python generate_relax_jobs.py                           # all 16 metals, bare+adatom
-    python generate_relax_jobs.py --metals Cu               # benchmark Cu only
-    python generate_relax_jobs.py --metals Cu Ag Au --variants bare adatom
-    python generate_relax_jobs.py --ecut 400 --kpts 1 1 1   # gamma-point (default)
-    python generate_relax_jobs.py --kpts 2 2 1              # k-point refinement
+    python generate_relax_jobs.py --metals Cu Ag Au --variants bare adatom \
+        --molecules H2O H2S NH3 PH3 HCN CH2O CH2NH --outdir jobs_mol_on_surf
+    python generate_relax_jobs.py --scf-only                # fast SCF test mode
 """
 
 import os, sys, json, argparse, secrets
@@ -45,9 +46,9 @@ STUDY_METALS = ['Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu',
 # PBS resource estimates per metal group (spec §7.2)
 # 3d metals: lighter, 4d/5d: ~1.5-2x more expensive
 PBS_RESOURCES = {
-    '3d':   {'ncpus': 8,  'mem': '16gb', 'walltime': '02:00:00', 'scratch_gb': 20},
-    '4d5d': {'ncpus': 16, 'mem': '32gb', 'walltime': '04:00:00', 'scratch_gb': 30},
-    'sp':   {'ncpus': 8,  'mem': '16gb', 'walltime': '02:00:00', 'scratch_gb': 20},  # Al
+    '3d':   {'ncpus': 8, 'mem': '32gb', 'walltime': '23:00:00', 'scratch_gb': 20},
+    '4d5d': {'ncpus': 8, 'mem': '32gb', 'walltime': '23:00:00', 'scratch_gb': 20},
+    'sp':   {'ncpus': 8, 'mem': '32gb', 'walltime': '23:00:00', 'scratch_gb': 20},
 }
 
 def metal_group(metal):
@@ -59,6 +60,8 @@ def metal_group(metal):
 
 VARIANTS = ['bare', 'adatom']
 COINAGE_VARIANTS = ['bare', 'adatom', 'dimer', 'trimer', 'row']
+MOLECULES = ['H2O', 'H2S', 'NH3', 'PH3', 'HCN', 'CH2O', 'CH2NH']
+N_FROZEN_3X3X3 = 18  # bottom 2 layers of 3x3x3 FCC(111) slab
 
 
 def read_contcar(path):
@@ -306,6 +309,7 @@ def main():
     parser = argparse.ArgumentParser(description='Bake GPAW relax jobs for metal slabs (Metacentrum)')
     parser.add_argument('--metals', nargs='*', default=STUDY_METALS, help='Metal symbols (default: all 16)')
     parser.add_argument('--variants', nargs='*', default=VARIANTS, help='Variants (default: bare adatom)')
+    parser.add_argument('--molecules', nargs='*', default=None, help='Molecules to place on surface (e.g. H2O NH3). If given, generates molecule-on-surface jobs.')
     parser.add_argument('--ecut', type=float, default=400.0, help='PW cutoff in eV (default: 400)')
     parser.add_argument('--kpts', type=int, nargs=3, default=[1, 1, 1], help='K-points (default: 1 1 1 = gamma)')
     parser.add_argument('--xc', type=str, default='PBE', help='XC functional (default: PBE)')
@@ -323,6 +327,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     variants = COINAGE_VARIANTS if args.coinage else args.variants
+    molecules = args.molecules
     params = dict(ecut=args.ecut, xc=args.xc, kpts=tuple(args.kpts),
                   smearing=args.smearing, fmax=args.fmax, maxsteps=args.maxsteps,
                   scf_only=args.scf_only)
@@ -331,6 +336,8 @@ def main():
     print("Baking GPAW relax jobs for metal slabs")
     print(f"  Metals: {args.metals}")
     print(f"  Variants: {variants}")
+    if molecules:
+        print(f"  Molecules: {molecules}")
     print(f"  Mode: {'SCF only' if args.scf_only else 'Relaxation'}")
     print(f"  ecut={args.ecut} eV, kpts={tuple(args.kpts)}, xc={args.xc}, smearing={args.smearing}")
     print(f"  fmax={args.fmax}, maxsteps={args.maxsteps}")
@@ -347,44 +354,83 @@ def main():
         scratch_gb = spec['scratch_gb']
 
         for variant in variants:
-            job_dir = os.path.join(systems_dir, metal, f'{variant}_111_3x3x3')
-            contcar = os.path.join(job_dir, 'input', 'CONTCAR')
-            meta_path = os.path.join(job_dir, 'meta.json')
+            if molecules:
+                # Molecule-on-surface jobs: iterate over molecules
+                for mol_name in molecules:
+                    job_subdir = f'{variant}_{mol_name}_111_3x3x3'
+                    job_dir = os.path.join(systems_dir, metal, job_subdir)
+                    contcar = os.path.join(job_dir, 'input', 'CONTCAR')
 
-            if not os.path.exists(contcar):
-                print(f"  SKIP: {contcar} not found")
-                continue
+                    if not os.path.exists(contcar):
+                        print(f"  SKIP: {contcar} not found")
+                        continue
 
-            # Read geometry
-            syms, ps, cell = read_contcar(contcar)
+                    syms, ps, cell = read_contcar(contcar)
+                    frozen_indices = list(range(N_FROZEN_3X3X3))
+                    # Find adatom index: highest-z metal atom
+                    if variant == 'adatom':
+                        metal_z = [(ps[i, 2], i) for i, s in enumerate(syms) if s == metal]
+                        metal_z.sort(reverse=True)
+                        adatom_idx = metal_z[0][1]
+                    else:
+                        adatom_idx = None
 
-            # Read meta.json for frozen indices + adatom index
-            with open(meta_path) as f:
-                meta = json.load(f)
-            frozen_indices = meta['geometry']['frozen_indices']
-            adatom_idx = meta['geometry'].get('adatom_index', None)
+                    job_variant = f'{variant}_{mol_name}'
+                    script_name = f'run_{metal}_{job_variant}.py'
+                    script_path = os.path.join(out_dir, script_name)
+                    script_content = bake_run_script(metal, job_variant, syms, ps, cell,
+                                                     frozen_indices, adatom_idx, params)
+                    with open(script_path, 'w') as f:
+                        f.write(script_content)
+                    os.chmod(script_path, 0o755)
 
-            # Bake runner script
-            script_name = f'run_{metal}_{variant}.py'
-            script_path = os.path.join(out_dir, script_name)
-            script_content = bake_run_script(metal, variant, syms, ps, cell,
-                                             frozen_indices, adatom_idx, params)
-            with open(script_path, 'w') as f:
-                f.write(script_content)
-            os.chmod(script_path, 0o755)
+                    pbs_name = f'submit_{metal}_{job_variant}.pbs'
+                    pbs_path = os.path.join(out_dir, pbs_name)
+                    pbs_content = bake_pbs_script(metal, job_variant, spec, script_name, scratch_gb, scf_only=args.scf_only)
+                    with open(pbs_path, 'w') as f:
+                        f.write(pbs_content)
+                    os.chmod(pbs_path, 0o755)
+                    pbs_paths.append(pbs_path)
 
-            # Bake PBS script
-            pbs_name = f'submit_{metal}_{variant}.pbs'
-            pbs_path = os.path.join(out_dir, pbs_name)
-            pbs_content = bake_pbs_script(metal, variant, spec, script_name, scratch_gb, scf_only=args.scf_only)
-            with open(pbs_path, 'w') as f:
-                f.write(pbs_content)
-            os.chmod(pbs_path, 0o755)
-            pbs_paths.append(pbs_path)
+                    n_baked += 1
+                    print(f"  {metal:4s} {job_variant:15s}  atoms={len(syms):2d}  frozen={len(frozen_indices):2d}  "
+                          f"cpus={spec['ncpus']:2d}  mem={spec['mem']:5s}  {spec['walltime']}")
+            else:
+                # Slab-only jobs (original behavior)
+                job_dir = os.path.join(systems_dir, metal, f'{variant}_111_3x3x3')
+                contcar = os.path.join(job_dir, 'input', 'CONTCAR')
+                meta_path = os.path.join(job_dir, 'meta.json')
 
-            n_baked += 1
-            print(f"  {metal:4s} {variant:7s}  atoms={len(syms):2d}  frozen={len(frozen_indices):2d}  "
-                  f"cpus={spec['ncpus']:2d}  mem={spec['mem']:5s}  {spec['walltime']}")
+                if not os.path.exists(contcar):
+                    print(f"  SKIP: {contcar} not found")
+                    continue
+
+                syms, ps, cell = read_contcar(contcar)
+
+                with open(meta_path) as f:
+                    meta = json.load(f)
+                frozen_indices = meta['geometry']['frozen_indices']
+                adatom_idx = meta['geometry'].get('adatom_index', None)
+
+                script_name = f'run_{metal}_{variant}.py'
+                script_path = os.path.join(out_dir, script_name)
+                script_content = bake_run_script(metal, variant, syms, ps, cell,
+                                                 frozen_indices, adatom_idx, params)
+                with open(script_path, 'w') as f:
+                    f.write(script_content)
+                os.chmod(script_path, 0o755)
+
+                pbs_name = f'submit_{metal}_{variant}.pbs'
+                pbs_path = os.path.join(out_dir, pbs_name)
+                pbs_content = bake_pbs_script(metal, variant, spec, script_name, scratch_gb, scf_only=args.scf_only)
+                with open(pbs_path, 'w') as f:
+                    f.write(pbs_content)
+                os.chmod(pbs_path, 0o755)
+                pbs_paths.append(pbs_path)
+
+                n_baked += 1
+                print(f"  {metal:4s} {variant:7s}  atoms={len(syms):2d}  frozen={len(frozen_indices):2d}  "
+                      f"cpus={spec['ncpus']:2d}  mem={spec['mem']:5s}  {spec['walltime']}")
 
     # Write submit_all.sh
     submit_all = os.path.join(out_dir, 'submit_all.sh')

@@ -53,6 +53,58 @@ rsync -avh --progress prokop@storage-praha1.metacentrum.cz:/home/prokop/PATH .
 
 Job states: `Q` (queued), `R` (running), `E` (exiting), `F` (finished).
 
+## Inspecting Running Jobs
+
+Jobs write to `$SCRATCHDIR` on the compute node (fast local NVMe). Output is only copied back to `$PBS_O_WORKDIR` when the job finishes (via the `trap ... EXIT` line in the PBS script). To check a running job's progress, SSH to the compute node and inspect scratch directly.
+
+### Step 1: Find the compute node and scratch path
+
+```bash
+qstat -f JOBID | grep -E "exec_host|SCRATCHDIR"
+```
+
+- `exec_host` → compute node name (e.g. `magma1/33*8` → node `magma1`)
+- `SCRATCHDIR` → scratch path on that node (e.g. `/scratch.ssd/prokop/job_23055127.pbs-m1`)
+
+### Step 2: SSH to the compute node and inspect
+
+```bash
+ssh magma1 "ls /scratch.ssd/prokop/job_23055127.pbs-m1/"
+ssh magma1 "tail -30 /scratch.ssd/prokop/job_23055127.pbs-m1/results_JOBNAME/gpaw.txt"
+```
+
+### Step 3: Check GPAW SCF convergence
+
+For GPAW jobs, the main log file is `results_<job_name>/gpaw.txt`. Look for:
+- `iter:` lines — SCF iterations with energy and density change
+- `BFGS:` lines — geometry optimization step progress (relax jobs)
+- `converged` or `FMAX` — force convergence status
+- Any `Traceback` or `Error` — job failures
+
+### Step 4: Check ChemBook status
+
+```bash
+ssh magma1 "cat /scratch.ssd/prokop/job_23055127.pbs-m1/results_JOBNAME/chembook.json"
+```
+
+`status: "pending"` = still running, `status: "done"` = finished, `status: "failed"` = error.
+
+### Quick batch check (all running jobs)
+
+```bash
+qstat -u prokop | awk '/R /{print $1}' | while read jid; do
+    node=$(qstat -f $jid 2>/dev/null | awk '/exec_host =/{print $3}' | cut -d/ -f1)
+    scratch=$(qstat -f $jid 2>/dev/null | grep -oP 'SCRATCHDIR=\K[^,]+')
+    echo "$jid on $node: $(ssh $node "ls $scratch/results_*/ 2>/dev/null | tr '\n' ' '")"
+done
+```
+
+### Notes
+
+- Compute nodes are reachable via SSH from the frontend (`metafzu.fzu.cz`) — no need for `qsub -I`.
+- Scratch is node-local NVMe — not visible from the frontend or other nodes.
+- After job finishes, `trap 'cp -r $SCRATCHDIR/* $PBS_O_WORKDIR/' EXIT` copies everything back. Check `$PBS_O_WORKDIR` for `*.o<JOBID>` (combined stdout/stderr) and `results_*/` directories.
+
 ## PBS Job Script Template
 
 ```bash

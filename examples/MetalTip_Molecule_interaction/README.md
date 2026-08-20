@@ -7,6 +7,7 @@ FCC(111) metal surfaces (bare vs. adatom vs. multi-adatom). See
 ## Phase 1: Metal geometry generation
 
 Generated 41 geometries: 16 metals × {bare, adatom} + Cu/Ag/Au × {dimer, trimer, row}.
+All 41 slab geometries relaxed (GPAW PBE PW(400eV) gamma-point, dipole correction, 18 frozen atoms).
 
 ### Directory structure (ChemBook protocol)
 ```
@@ -92,4 +93,47 @@ systems/<Metal>/
 ```bash
 python generate_metal_geometries.py                    # all 16 metals
 python generate_metal_geometries.py --metals Cu Ag Au  # subset
+```
+
+## Phase 2: Molecule-on-surface geometry generation
+
+Places 7 molecules (H2O, H2S, NH3, PH3, HCN, CH2O, CH2NH) on **relaxed** Cu/Ag/Au slabs (bare + adatom).
+Molecule oriented so its electron lone pair faces the target metal atom at ~2.4 Å (epair-to-metal distance).
+Binary hydrides (H2O, H2S, NH3, PH3) generated from bond length + H-X-H angle via `make_hydride()`.
+Cell z-height fixed to 22 Å for all geometries (consistent vacuum).
+
+### Key parameters
+- Molecules: H2O, H2S, NH3, PH3, HCN, CH2O, CH2NH
+- Metals: Cu, Ag, Au (coinage only — relaxed slabs from Phase 1)
+- Variants: bare, adatom
+- Epair-to-metal distance: 2.4 Å (host-metal dist ~2.9 Å including 0.5 Å epair offset)
+- Cell z: 22 Å (fixed for all)
+- Frozen: bottom 18 atoms (same as Phase 1)
+- Total: 3 × 2 × 7 = 42 geometries
+
+### Directory structure
+```
+systems/<Metal>/
+  bare_H2O_111_3x3x3/input/CONTCAR    # molecule + slab
+  bare_H2O_111_3x3x3/input/start.xyz
+  adatom_H2O_111_3x3x3/input/CONTCAR
+  ...
+```
+
+### Usage
+```bash
+python generate_molecule_on_surface.py                              # all 3 metals, 2 variants, 7 molecules
+python generate_molecule_on_surface.py --metals Cu --molecules H2O  # subset
+```
+
+## Phase 2b: Relaxation jobs (molecule-on-surface)
+
+42 GPAW relax jobs baked in `jobs_mol_on_surf/`. PBE PW(400eV) gamma-point, FermiDirac(0.05),
+dipole correction, 8 CPUs, 32 GiB RAM, 23h walltime. Submitted to `luna` queue (magma.fzu.cz).
+
+### Usage
+```bash
+python generate_relax_jobs.py --metals Cu Ag Au --variants bare adatom \
+    --molecules H2O H2S NH3 PH3 HCN CH2O CH2NH --outdir jobs_mol_on_surf
+cd jobs_mol_on_surf && bash submit_all.sh   # submit to Metacentrum
 ```

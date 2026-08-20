@@ -13,6 +13,8 @@ VALENCE_DICT={
 #        nBond  nEpair
 'O':   ( 2,     2  ),
 'N':   ( 3,     1  ),
+'S':   ( 2,     2  ),
+'P':   ( 3,     1  ),
 }
 
 class AtomicSystem( ):

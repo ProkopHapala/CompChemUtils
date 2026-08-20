@@ -353,7 +353,7 @@ def auto_edge_placement(
     return best
 
 
-def _find_host_atom(mol, preferred=('O', 'N')):
+def _find_host_atom(mol, preferred=('O', 'N', 'S', 'P')):
     for e in preferred:
         for i, ee in enumerate(mol.enames):
             if ee == e:
@@ -1083,3 +1083,75 @@ def build_hbond_dimer(mol_xyz, mol2_xyz=None, host=None, separation=2.9, axis=(0
     dimer.qs = dimer.Rs = None
     dimer.neighs(bBond=True)
     return dimer
+
+
+# =============================================================
+#  Binary hydride generator (XH_n from bond length + angle)
+# =============================================================
+
+# Experimental bond lengths (Å) and H-X-H angles (deg) for common hydrides
+HYDRIDE_PARAMS = {
+    # n=2 (bent)
+    'H2O':  {'el': 'O',  'nH': 2, 'r': 0.9572, 'angle': 104.52},
+    'H2S':  {'el': 'S',  'nH': 2, 'r': 1.3356, 'angle': 92.12},
+    # n=3 (pyramidal)
+    'NH3':  {'el': 'N',  'nH': 3, 'r': 1.012,  'angle': 107.0},
+    'PH3':  {'el': 'P',  'nH': 3, 'r': 1.421,  'angle': 93.5},
+    # n=4 (tetrahedral)
+    'CH4':  {'el': 'C',  'nH': 4, 'r': 1.087,  'angle': 109.47},
+    'SiH4': {'el': 'Si', 'nH': 4, 'r': 1.479,  'angle': 109.47},
+}
+
+def make_hydride(el, nH, r, angle_deg):
+    """Generate binary hydride XH_n with Cnv symmetry.
+    Central atom at origin, H atoms arranged symmetrically about z-axis.
+
+    Parameters:
+        el: central element symbol (e.g. 'O', 'N', 'C')
+        nH: number of H atoms (2=bent, 3=pyramidal, 4=tetrahedral)
+        r: X-H bond length (Å)
+        angle_deg: H-X-H angle (degrees)
+
+    Returns: (symbols, positions) — positions in Å, central atom at origin.
+    """
+    alpha = np.deg2rad(angle_deg)
+    syms = [el] + ['H'] * nH
+    ps = np.zeros((nH + 1, 3))
+    ps[0] = [0.0, 0.0, 0.0]  # central atom at origin
+
+    if nH == 2:
+        # Bent: 2 H atoms in xz plane, symmetric about z
+        beta = alpha / 2.0
+        ps[1] = [r * np.sin(beta), 0.0, r * np.cos(beta)]
+        ps[2] = [-r * np.sin(beta), 0.0, r * np.cos(beta)]
+    elif nH == 3:
+        # Pyramidal: C3v symmetry, 3 H atoms at polar angle beta from +z
+        cos2b = (np.cos(alpha) + 0.5) / 1.5
+        if cos2b < 0 or cos2b > 1:
+            raise ValueError(f"Invalid angle {angle_deg}° for nH=3: cos²β={cos2b:.4f} out of [0,1]")
+        beta = np.arccos(np.sqrt(cos2b))
+        for k in range(3):
+            phi = 2 * np.pi * k / 3
+            ps[1 + k] = [r * np.sin(beta) * np.cos(phi),
+                         r * np.sin(beta) * np.sin(phi),
+                         r * np.cos(beta)]
+    elif nH == 4:
+        # Tetrahedral: 3 H atoms at beta from -z, 1 H at +z
+        # For perfect tetrahedron: beta = arccos(1/3) ≈ 70.53°
+        # General: bottom-bottom angle = alpha, top-bottom angle = arccos(-cos(beta))
+        cos2b = (np.cos(alpha) + 0.5) / 1.5
+        if cos2b < 0 or cos2b > 1:
+            raise ValueError(f"Invalid angle {angle_deg}° for nH=4: cos²β={cos2b:.4f} out of [0,1]")
+        beta = np.arccos(np.sqrt(cos2b))
+        # Top H along +z
+        ps[1] = [0.0, 0.0, r]
+        # 3 bottom H atoms at beta from -z
+        for k in range(3):
+            phi = 2 * np.pi * k / 3
+            ps[2 + k] = [r * np.sin(beta) * np.cos(phi),
+                         r * np.sin(beta) * np.sin(phi),
+                         -r * np.cos(beta)]
+    else:
+        raise ValueError(f"nH={nH} not supported (only 2, 3, 4)")
+
+    return syms, ps

@@ -27,8 +27,8 @@
 ### Geometry / chemistry layer (`py/`)
 | File | Role |
 |------|------|
-| `AtomicSystem.py` | Canonical geometry container (`apos`, `enames`, `atypes`, PBC, bonds); XYZ/MOL/MOL2/GEN I/O; selections, rotations, neighbor lists, `clonePBC()`, `add_electron_pairs()` |
-| `geom_engine.py` | Program-agnostic constraints (`GeomConstraint`, `freeze_atoms`, `fix_distance`); adsorption placement (`place_molecule_on_edge`, `auto_edge_placement`, `generate_edge_attach_movie`); H-bond dimer assembly (`build_hbond_dimer`, `strip_epairs`); `validate_geometry()` |
+| `AtomicSystem.py` | Canonical geometry container (`apos`, `enames`, `atypes`, PBC, bonds); XYZ/MOL/MOL2/GEN I/O; selections, rotations, neighbor lists, `clonePBC()`, `add_electron_pairs()` (N, O, S, P valence) |
+| `geom_engine.py` | Program-agnostic constraints (`GeomConstraint`, `freeze_atoms`, `fix_distance`); adsorption placement (`place_molecule_on_edge`, `auto_edge_placement`, `generate_edge_attach_movie`); H-bond dimer assembly (`build_hbond_dimer`, `strip_epairs`); `validate_geometry()`; `make_hydride()` universal XH_n generator from bond length + angle; `_find_host_atom()` / `_mol_frame_from_epairs()` for molecule-on-surface orientation |
 | `atomicUtils.py` | Low-level primitives: file loaders, bond/H-bond detection, angles/dihedrals, orientation frames, graph/cycle helpers, fragment assembly |
 | `elements.py` | Periodic-table lookup (Z, radii, masses, Jmol colors, valence electrons) |
 | `AtomicGraph.py` | Object-graph alternative to parallel arrays (`Atom`/`Bond`/`Ring` with stable identity; `to_arrays()` for numpy/vispy) |
@@ -230,11 +230,13 @@ Systematic study of coordination bond strength between small molecules and FCC(1
 | File | Role |
 |------|------|
 | `generate_metal_geometries.py` | Build FCC(111) slabs for 16 study metals: bare, single adatom (all metals), plus dimer/trimer/row multi-adatom configs (Cu, Ag, Au only). ChemBook protocol: `meta.json` + `README.md` per node, `input/CONTCAR` + `input/start.xyz`, preview plots as `<variant>.png` next to job dir. Uses Jmol colors from `py/elements.py` |
-| `generate_relax_jobs.py` | Bake GPAW relax/SCF job scripts (Python runner + PBS) for Metacentrum: PW mode, FermiDirac smearing, dipole correction (`poissonsolver={'dipolelayer':'xy'}`), `FixAtoms` on bottom layers, ChemBook provenance, cube output (density/potential), `--scf-only` and `--coinage` flags |
+| `generate_relax_jobs.py` | Bake GPAW relax/SCF job scripts (Python runner + PBS) for Metacentrum: PW mode, FermiDirac smearing, dipole correction (`poissonsolver={'dipolelayer':'xy'}`), `FixAtoms` on bottom layers, ChemBook provenance, cube output (density/potential), `--scf-only` and `--coinage` flags. `--molecules` flag: bake molecule-on-surface jobs from `systems/<Metal>/<variant>_<molecule>_111_3x3x3/input/CONTCAR` |
+| `generate_molecule_on_surface.py` | Phase 2 CLI: place molecules on relaxed Cu/Ag/Au slabs (bare + adatom). Orients molecule so electron lone pair faces target metal atom at ~2.4 Å. Uses `make_hydride()` for binary hydrides, XYZ files for HCN/CH2O/CH2NH. Reads relaxed slabs from `jobs_coinage/results_*/relaxed.xyz`. Cell z fixed to 22 Å |
+| `make_hydrides.py` | Generate XYZ files for binary hydrides (H2O, H2S, NH3, PH3, CH4, SiH4) using `make_hydride()` from `geom_engine.py` |
 | `benchmark_cu_relax.py` | Benchmark metal slab relaxation (spec §11.1): loads geometry from ChemBook job dir, runs GPAW PBE with dipole correction + frozen bottom layers, verifies frozen-atom displacement + adatom position. Supports `--mode local` and `--mode export` |
 | `plot_init_final.py` | Thin wrapper: plot initial vs final geometry from `init_final_xyz/*.xyz` using `plotUtils.plot_init_final_comparison()` — 3 projections (XZ/YZ/XY) × 2 rows (full + top layers), red=initial, blue=final |
-| `README.md` | Phase 1 summary table (41 geometries), ChemBook directory layout, key parameters, usage |
-| `systems/` | Generated geometry nodes (ChemBook protocol) — 16 metals × {bare, adatom} + 3 coinage × {dimer, trimer, row} = 41 geometries; not listed here |
+| `README.md` | Phase 1 summary table (41 geometries), Phase 2 molecule-on-surface (42 geometries), ChemBook directory layout, key parameters, usage |
+| `systems/` | Generated geometry nodes (ChemBook protocol) — 41 slab geometries (Phase 1) + 42 molecule-on-surface geometries (Phase 2: Cu/Ag/Au × bare/adatom × 7 molecules); not listed here |
 
 ### `phonons/` — bulk phonon dispersion toolkit
 | File | Role |
