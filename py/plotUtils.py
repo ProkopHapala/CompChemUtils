@@ -954,3 +954,49 @@ f"""
                               pos2[0], pos2[1], pos2[2], bond_width, 
                               bond_clr[0],  bond_clr[1], bond_clr[2]  ))
 
+# --- Initial vs Final Geometry Comparison ---
+
+COV_RADII = {'Cu': 1.32, 'Ag': 1.45, 'Au': 1.36, 'Al': 1.18, 'Ti': 1.60, 'V': 1.53,
+             'Cr': 1.39, 'Mn': 1.39, 'Fe': 1.32, 'Co': 1.26, 'Ni': 1.24, 'Zn': 1.22,
+             'Mo': 1.45, 'W': 1.46, 'Pd': 1.39, 'Pt': 1.36}
+
+def find_bonds(syms, ps, tol=0.25):
+    """Find bonds based on covalent radii sum + tolerance."""
+    bonds = []
+    n = len(syms)
+    for i in range(n):
+        ri = COV_RADII.get(syms[i], 1.5)
+        for j in range(i+1, n):
+            rj = COV_RADII.get(syms[j], 1.5)
+            d = np.linalg.norm(ps[i] - ps[j])
+            if d < ri + rj + tol:
+                bonds.append((i, j))
+    return bonds
+
+def _plot_projection(ax, ps_init, ps_final, bonds, proj_axes, title, frozen_idx=None):
+    """Plot one projection of init (red) vs final (blue) with bonds as thin lines, atoms as dots.
+    Frozen atoms get black empty circles around them."""
+    a1, a2 = proj_axes
+    for i, j in bonds:
+        ax.plot([ps_init[i, a1], ps_init[j, a1]], [ps_init[i, a2], ps_init[j, a2]], color='red', lw=0.4, alpha=0.6, zorder=1)
+        ax.plot([ps_final[i, a1], ps_final[j, a1]], [ps_final[i, a2], ps_final[j, a2]], color='blue', lw=0.4, alpha=0.6, zorder=2)
+    ax.scatter(ps_init[:, a1], ps_init[:, a2], c='red', s=8, zorder=3, edgecolors='none')
+    ax.scatter(ps_final[:, a1], ps_final[:, a2], c='blue', s=8, zorder=4, edgecolors='none')
+    if frozen_idx is not None and len(frozen_idx) > 0:
+        ax.scatter(ps_init[frozen_idx, a1], ps_init[frozen_idx, a2], s=60, facecolors='none', edgecolors='black', lw=0.8, zorder=5)
+    ax.set_aspect('equal'); ax.set_title(title, fontsize=9); ax.tick_params(labelsize=7)
+
+def plot_init_final_comparison(syms, ps_init, ps_final, name='geometry', n_frozen=0, fname=None, dpi=150):
+    """Plot initial (red) vs final (blue) geometry: 3 projections (XZ, YZ, XY) in a single row.
+    Atoms = small dots, bonds = thin lines, frozen atoms marked with black empty circles. Returns fig."""
+    bonds = find_bonds(syms, ps_init)
+    frozen_idx = list(range(n_frozen)) if n_frozen > 0 else None
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    _plot_projection(axes[0], ps_init, ps_final, bonds, (0, 2), f"{name} — XZ (side)", frozen_idx=frozen_idx)
+    _plot_projection(axes[1], ps_init, ps_final, bonds, (1, 2), f"{name} — YZ (side)", frozen_idx=frozen_idx)
+    _plot_projection(axes[2], ps_init, ps_final, bonds, (0, 1), f"{name} — XY (top)", frozen_idx=frozen_idx)
+    fig.suptitle(f"{name}: red=initial, blue=final, ○=frozen", fontsize=11)
+    fig.tight_layout()
+    if fname is not None:
+        fig.savefig(fname, dpi=dpi, bbox_inches='tight'); plt.close(fig)
+    return fig

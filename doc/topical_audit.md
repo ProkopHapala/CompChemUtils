@@ -685,10 +685,11 @@ Shared plotting and interactive visualization. `plotUtils.py` for matplotlib dia
 
 | Location | Status | Notes |
 |----------|--------|-------|
-| [`py/plotUtils.py`](../py/plotUtils.py) | active | 1D scans, 2D scalar fields, `plot_cube_slice`, `plotGeometry`, trajectories |
+| [`py/plotUtils.py`](../py/plotUtils.py) | active | 1D scans, 2D scalar fields, `plot_cube_slice`, `plotGeometry`, trajectories, `plot_init_final_comparison` (init vs final geometry: 3 projections × 2 zoom levels, bonds + dots) |
 | [`py/molVisApp.py`](../py/molVisApp.py) | active | PyQt5 + Vispy viewer (`python -m py.molVisApp [xyz|POSCAR]`) |
 | [`examples/plot_movies.py`](../examples/plot_movies.py) | active | XY/XZ previews of XYZ movies |
 | [`examples/MetalTip_Molecule_interaction/generate_metal_geometries.py`](../examples/MetalTip_Molecule_interaction/generate_metal_geometries.py) | active | Preview plots (3×3 replicated, frozen-atom highlight) |
+| [`examples/MetalTip_Molecule_interaction/plot_init_final.py`](../examples/MetalTip_Molecule_interaction/plot_init_final.py) | active | Thin wrapper: `plot_init_final_comparison()` on `init_final_xyz/*.xyz` — relax before/after comparison |
 | [`examples/phonons/plot_phonon_comparison.py`](../examples/phonons/plot_phonon_comparison.py), `plot_bz_paths_3d.py`, `export_phonon_html.py` | active | Phonon band plots + 3D BZ + HTML viewer |
 | [`examples/tSiNCs/vib_plot.py`](../examples/tSiNCs/vib_plot.py), `plot_modes_arrows.py`, `plot_vib_spectra.py` | active | Vibrational stick/Gaussian spectra + mode arrows |
 | [`examples/fukui/plot_fukui_slices*.py`](../examples/fukui/README.md) | active | 2D Fukui slice panels |

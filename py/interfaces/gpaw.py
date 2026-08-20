@@ -320,7 +320,8 @@ class GPAWBackend(CalculationBackend):
 
     def __init__(self, kpts=(1, 1, 1), mode='pw', ecut=300.0, xc='PBE',
                  spinpol=False, charge=0, symmetry='off', h=None,
-                 maxiter=333, mixer=None, dipole=None, dipole_width=1.0):
+                 maxiter=333, mixer=None, dipole=None, dipole_width=1.0,
+                 occupations=None, smearing=0.05, convergence=None):
         self.kpts = kpts
         self.mode = mode
         self.ecut = float(ecut)
@@ -335,6 +336,9 @@ class GPAWBackend(CalculationBackend):
         self.dipole_width = float(dipole_width)
         self.maxiter = maxiter
         self.mixer = mixer
+        self.smearing = float(smearing)
+        self.occupations = occupations  # if None, auto-set FermiDirac(smearing) for metals
+        self.convergence = convergence or dict(energy=1e-5, density=1e-5, bands='occupied')
 
     # ---- helpers
     def _to_ase(self, geom):
@@ -359,7 +363,7 @@ class GPAWBackend(CalculationBackend):
         """Build a GPAW calculator. If self.dipole is set, wraps the Poisson
         solver with DipoleCorrection (spec §5.1 — cell boundary correction
         for slab calculations with vacuum below the slab)."""
-        from gpaw import GPAW, PW, LCAO
+        from gpaw import GPAW, PW, LCAO, FermiDirac
         kwargs = {
             'xc': self.xc,
             'kpts': self.kpts,
@@ -367,7 +371,12 @@ class GPAWBackend(CalculationBackend):
             'charge': self.charge,
             'symmetry': self.symmetry,
             'maxiter': self.maxiter,
+            'convergence': self.convergence,
         }
+        if self.occupations is not None:
+            kwargs['occupations'] = self.occupations
+        else:
+            kwargs['occupations'] = FermiDirac(self.smearing)  # spec §5.7: metals need smearing
         if self.mixer is not None:
             kwargs['mixer'] = self.mixer
         if self.h is not None:
@@ -380,11 +389,15 @@ class GPAWBackend(CalculationBackend):
             else:
                 raise ValueError(f"GPAWBackend: unknown mode {self.mode!r}")
         if self.dipole is not None:
-            from gpaw.dipole_correction import DipoleCorrection
-            from gpaw.poisson import PoissonSolver
-            ps = PoissonSolver(name='fd', nn=2)  # finite-difference, 2 nearest-neighbor stencil
-            dc = DipoleCorrection(ps, direction=self.dipole, width=self.dipole_width)
-            kwargs['poisson'] = dc
+            if self.mode == 'pw':
+                # PW mode: use dict format — DipoleCorrection wrapper fails (assert len(psolver)==1)
+                kwargs['poissonsolver'] = {'dipolelayer': 'xy'}
+            else:
+                from gpaw.dipole_correction import DipoleCorrection
+                from gpaw.poisson import PoissonSolver
+                ps = PoissonSolver(name='fd', nn=2)
+                dc = DipoleCorrection(ps, direction=self.dipole, width=self.dipole_width)
+                kwargs['poissonsolver'] = dc
         return GPAW(**kwargs)
 
     # ---- local execution
@@ -477,20 +490,25 @@ class GPAWBackend(CalculationBackend):
         return os.path.abspath(fpath)
 
     def _dipole_setup_code(self):
-        """Generate Python code for dipole correction setup (for export scripts)."""
+        """Generate Python code for dipole correction setup (for export scripts).
+        In PW mode, use dict format {'dipolelayer': 'xy'} — DipoleCorrection wrapper
+        fails with assert len(psolver)==1. In FD/LCAO mode, use the wrapper object."""
         if self.dipole is None:
             return ""
+        if self.mode == 'pw':
+            return "__dipole__ = {'dipolelayer': 'xy'}\n"
         d = repr(self.dipole) if isinstance(self.dipole, str) else str(self.dipole)
         return f"""from gpaw.dipole_correction import DipoleCorrection
 from gpaw.poisson import PoissonSolver
 ps = PoissonSolver(name='fd', nn=2)
-poisson = DipoleCorrection(ps, direction={d}, width={self.dipole_width})"""
+__dipole__ = DipoleCorrection(ps, direction={d}, width={self.dipole_width})
+"""
 
     def export_energy(self, geom, method=None, basis=None, outdir='.', fname='gpaw_sp.py', **kw) -> List[str]:
         atoms = self._to_ase(geom)
         xc = method or self.xc
         dipole_code = self._dipole_setup_code()
-        poisson_kw = ", poisson=poisson" if dipole_code else ""
+        poisson_kw = ", poissonsolver=__dipole__" if dipole_code else ""
         setup = f"""calc = GPAW(xc='{xc}', kpts={self.kpts}, spinpol={self.spinpol},
             charge={self.charge}, symmetry='{self.symmetry}', maxiter={self.maxiter}{poisson_kw})"""
         if self.mode == 'pw' and self.h is None:
@@ -503,19 +521,29 @@ poisson = DipoleCorrection(ps, direction={d}, width={self.dipole_width})"""
         return [fpath]
 
     def export_relax(self, geom, method=None, basis=None, constraints=None,
-                     outdir='.', fname='gpaw_relax.py', **kw) -> List[str]:
+                     outdir='.', fname='gpaw_relax.py', fmax=0.05, maxsteps=200, **kw) -> List[str]:
         atoms = self._to_ase(geom)
         xc = method or self.xc
         dipole_code = self._dipole_setup_code()
-        poisson_kw = ", poisson=poisson" if dipole_code else ""
-        setup = f"""calc = GPAW(mode=PW({self.ecut}), xc='{xc}', kpts={self.kpts},
-            spinpol={self.spinpol}, charge={self.charge}, symmetry='{self.symmetry}', maxiter={self.maxiter}{poisson_kw})"""
+        poisson_kw = ", poissonsolver=__dipole__" if dipole_code else ""
+        # Build FixAtoms constraint code if constraints provided
+        fix_code = ""
+        if constraints:
+            for c in constraints:
+                if c.type == 'freeze_atoms':
+                    inds = ",".join(str(int(i)) for i in c.atoms)
+                    fix_code = f"from ase.constraints import FixAtoms\natoms.set_constraint(FixAtoms(indices=[{inds}]))\n"
+        setup = f"""from gpaw import FermiDirac
+calc = GPAW(mode=PW({self.ecut}), xc='{xc}', kpts={self.kpts},
+            spinpol={self.spinpol}, charge={self.charge}, symmetry='{self.symmetry}',
+            maxiter={self.maxiter}, occupations=FermiDirac({self.smearing}),
+            convergence={self.convergence}{poisson_kw})"""
         if dipole_code:
             setup = dipole_code + "\n" + setup
-        run = """from ase.optimize import BFGS
-atoms.calc = calc
-opt = BFGS(atoms)
-opt.run(fmax=0.05)
+        run = f"""from ase.optimize import BFGS
+{fix_code}atoms.calc = calc
+opt = BFGS(atoms, maxstep=0.2, logfile='-')
+opt.run(fmax={fmax}, steps={maxsteps})
 write('relaxed.xyz', atoms)
 print('E =', atoms.get_potential_energy(), 'eV')"""
         fpath = self._export_script(atoms, fname, setup, run, outdir)

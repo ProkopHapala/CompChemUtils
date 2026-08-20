@@ -34,7 +34,7 @@
 | `AtomicGraph.py` | Object-graph alternative to parallel arrays (`Atom`/`Bond`/`Ring` with stable identity; `to_arrays()` for numpy/vispy) |
 | `AtomicSystem_new.py` | Experimental fork of `AtomicSystem` with verbose debug logging; not the production import path |
 | `config_loader.py` | Machine-independent path/tool resolution from `machine_config.yaml` (`require_path`, `get_tool`, `dftbcore_lib`, `ensure_pyball_path`) |
-| `plotUtils.py` | Shared matplotlib diagnostics (1D scans, 2D scalar fields, cube slices, `plotGeometry`, trajectories); keep plotting out of core compute modules |
+| `plotUtils.py` | Shared matplotlib diagnostics (1D scans, 2D scalar fields, cube slices, `plotGeometry`, trajectories, `plot_init_final_comparison`); keep plotting out of core compute modules |
 | `molVisApp.py` | Interactive PyQt5 + Vispy molecular viewer (`python -m py.molVisApp [xyz|POSCAR]`) |
 | `__init__.py` | Package marker (empty) |
 
@@ -230,7 +230,9 @@ Systematic study of coordination bond strength between small molecules and FCC(1
 | File | Role |
 |------|------|
 | `generate_metal_geometries.py` | Build FCC(111) slabs for 16 study metals: bare, single adatom (all metals), plus dimer/trimer/row multi-adatom configs (Cu, Ag, Au only). ChemBook protocol: `meta.json` + `README.md` per node, `input/CONTCAR` + `input/start.xyz`, preview plots as `<variant>.png` next to job dir. Uses Jmol colors from `py/elements.py` |
+| `generate_relax_jobs.py` | Bake GPAW relax/SCF job scripts (Python runner + PBS) for Metacentrum: PW mode, FermiDirac smearing, dipole correction (`poissonsolver={'dipolelayer':'xy'}`), `FixAtoms` on bottom layers, ChemBook provenance, cube output (density/potential), `--scf-only` and `--coinage` flags |
 | `benchmark_cu_relax.py` | Benchmark metal slab relaxation (spec §11.1): loads geometry from ChemBook job dir, runs GPAW PBE with dipole correction + frozen bottom layers, verifies frozen-atom displacement + adatom position. Supports `--mode local` and `--mode export` |
+| `plot_init_final.py` | Thin wrapper: plot initial vs final geometry from `init_final_xyz/*.xyz` using `plotUtils.plot_init_final_comparison()` — 3 projections (XZ/YZ/XY) × 2 rows (full + top layers), red=initial, blue=final |
 | `README.md` | Phase 1 summary table (41 geometries), ChemBook directory layout, key parameters, usage |
 | `systems/` | Generated geometry nodes (ChemBook protocol) — 16 metals × {bare, adatom} + 3 coinage × {dimer, trimer, row} = 41 geometries; not listed here |
 

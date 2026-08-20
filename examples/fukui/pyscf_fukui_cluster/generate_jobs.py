@@ -37,6 +37,7 @@ MOLECULES = {
     'benzoicamid_dimer':  {'natoms': 32, 'nelec': 128, 'ncpus': 8,  'mem': '16gb',  'walltime': '06:00:00'},
     'phtalo_1-dftb-relax': {'natoms': 50, 'nelec': 246, 'ncpus': 8,  'mem': '16gb',  'walltime': '12:00:00'},
     'phtalo_2-dftb-relax': {'natoms': 50, 'nelec': 246, 'ncpus': 8,  'mem': '16gb',  'walltime': '12:00:00'},
+    'TBTAP':               {'natoms': 22, 'nelec': 242, 'ncpus': 8, 'mem': '16gb',  'walltime': '08:00:00'},
 }
 
 
